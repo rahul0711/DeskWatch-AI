@@ -1,0 +1,45 @@
+# AdaFace/SCRFD/ByteTrack/FAISS attendance system. Rendered by install.sh:
+# __NGINX_PORT__ is the public port, __BACKEND_PORT__ the local uvicorn port.
+server {
+    listen __NGINX_PORT__;
+    listen [::]:__NGINX_PORT__;
+    server_name _;
+
+    # nginx's compiled-in default is 1MB, which a single webcam capture
+    # (JPEG at 92% quality, possibly multiple angles in one registration
+    # request) blows past easily -> 413 Payload Too Large. Registration
+    # photos are a handful of JPEGs at most, so this is generous on purpose.
+    client_max_body_size 25M;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    # The dashboard's live view is a steady stream of frame events -- don't
+    # let nginx buffer/batch them into a laggy trickle.
+    proxy_buffering off;
+
+    # WebSocket (/ws/events) needs its own block with the Upgrade headers --
+    # split out rather than using the map-based $connection_upgrade trick
+    # (which needs a `map` directive in the global http{} block, out of
+    # reach without editing shared nginx config) so this stays a single
+    # self-contained site file.
+    location /ws/ {
+        proxy_pass http://127.0.0.1:__BACKEND_PORT__;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    # Everything else (the API, and the built React app -- uvicorn serves
+    # frontend/dist itself) goes through the same proxy_pass since it's all
+    # one FastAPI origin.
+    location / {
+        proxy_pass http://127.0.0.1:__BACKEND_PORT__;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+}

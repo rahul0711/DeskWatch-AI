@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFF</color>
+
+    <color name="app_background">#1A1D24</color>
+    <color name="app_surface">#2A2E39</color>
+    <color name="app_header_bg">#FFFFFF</color>
+    <color name="app_primary">#4A90E2</color>
+    <color name="app_text_primary">#111827</color>
+    <color name="app_text_secondary">#6B7280</color>
+    <color name="app_text_on_dark">#FFFFFF</color>
+    <color name="app_nav_item">#C8D0DC</color>
+    <color name="app_nav_item_selected">#FFFFFF</color>
+    <color name="app_drawer_bg">#1E2430</color>
+    <color name="app_drawer_divider">#2F3848</color>
+    <color name="app_drawer_item_selected_bg">#334A90E2</color>
+    <color name="app_logout">#EF5350</color>
+
+    <color name="punch_accent_blue">#1565C0</color>
+    <color name="punch_in_green">#2E7D32</color>
+    <color name="punch_out_red">#C62828</color>
+
+    <color name="login_navy">#0D1B3E</color>
+    <color name="login_accent">#1565C0</color>
+    <color name="login_input_fill">#F0F4F8</color>
+    <color name="login_label">#607D8B</color>
+    <color name="login_hint">#B0BEC5</color>
+    <color name="login_powered_muted">#78909C</color>
+</resources>

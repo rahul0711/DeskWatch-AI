@@ -1,0 +1,32 @@
+# ByteTrack config for ACTIVITY-MODE PERSON tracking
+# (app/detection/activity_detector.py -> ByteTrackFaceTracker).
+#
+# Why persons are tracked separately from everything else the activity
+# detector looks for: Ultralytics' model.track() returns ONLY boxes the
+# tracker has confirmed as tracks, and silently drops the rest. Measured on
+# this camera, that discarded 100% of cell-phone detections (9 of 9 over 40
+# frames) -- a phone is small, flickering and fast-moving, so it never
+# survives track confirmation. Objects don't need identity at all; they are
+# matched to a person geometrically, every frame. So the detector now runs
+# one plain predict() for every class and tracks only the person boxes
+# through this config.
+#
+# Tuned for a person at ACTIVITY_FPS (~4), not for 30fps video.
+
+tracker_type: bytetrack # (str) Tracker backend
+track_high_thresh: 0.3 # (float) First-stage match threshold
+track_low_thresh: 0.1 # (float) Second-stage threshold for low-score matches
+new_track_thresh: 0.35 # (float) Start a new track if no match >= this. Matches
+                       # ACTIVITY_PERSON_CONF -- a body below that confidence
+                       # shouldn't become a track and start accruing durations.
+track_buffer: 40 # (int) Frames to keep a lost track alive. Used as-is by this
+                 # Ultralytics version (no frame-rate scaling), so at
+                 # ACTIVITY_FPS=4 this is ~10s -- deliberately close to
+                 # ACTIVITY_TRACK_GRACE_SECONDS so
+                 # someone briefly occluded by a monitor or a passing colleague
+                 # keeps their id and their accumulated timers.
+match_thresh: 0.85 # (float) Association similarity threshold. Slightly looser
+                   # than the face tracker's 0.8: at 4fps a walking person
+                   # moves much further between frames than a face does at
+                   # 10fps, so boxes overlap less.
+fuse_score: True # (bool) Fuse detection score with motion/IoU for matching

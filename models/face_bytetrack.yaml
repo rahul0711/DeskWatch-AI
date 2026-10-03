@@ -1,0 +1,22 @@
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+#
+# ByteTrack config for face tracking (app/tracking/byte_tracker.py).
+# Copied from ultralytics' bundled bytetrack.yaml unchanged -- unlike
+# activity_botsort.yaml this doesn't need a gmc_method override since
+# ByteTrack has no global motion compensation step to begin with.
+
+tracker_type: bytetrack # (str) Tracker backend: bytetrack
+track_high_thresh: 0.25 # (float) First-stage match threshold; raise for cleaner tracks, lower to keep more
+track_low_thresh: 0.1 # (float) Second-stage threshold for low-score matches; balances recovery vs drift
+new_track_thresh: 0.25 # (float) Start a new track if no match ≥ this; higher reduces false tracks
+track_buffer: 30 # (int) Frames to keep lost tracks alive; higher handles occlusion, increases ID switches risk
+match_thresh: 0.65 # (float) Association similarity threshold (IoU/cost); tune with detector quality
+# Lowered from Ultralytics' stock 0.8 -- at 1080p main-stream resolution
+# with a small face box, ordinary head movement or one skipped frame from
+# a slow RTSP decode was enough to drop IoU below 0.8, splitting one
+# person into several track_ids within a couple seconds (observed: 3
+# track_ids for the same person 1.5s apart in data/attendance/). Each
+# fragment restarts the recognition candidate buffer from zero and fires
+# its own /Recognize call, so fragmentation directly hurts both load and
+# recognition quality.
+fuse_score: True # (bool) Fuse detection score with motion/IoU for matching; stabilizes weak detections

@@ -1,0 +1,43 @@
+<resources>
+    <string name="app_name">Aadil Group PMS</string>
+
+    <!-- App footer -->
+    <string name="app_footer_designed_by">Designed &amp; Developed by</string>
+    <string name="app_footer_script_india">Script India</string>
+
+    <!-- Login (InsightFace server /api/login) -->
+    <string name="login_subtitle">Sign in to start the attendance camera</string>
+    <string name="login_label_username">USERNAME</string>
+    <string name="login_hint_username">Username</string>
+    <string name="login_label_password">PASSWORD</string>
+    <string name="login_hint_password_short">Password</string>
+    <string name="login_sign_in">Sign In</string>
+    <string name="login_please_wait">Please wait…</string>
+    <string name="login_error_empty">Please enter username and password</string>
+    <string name="login_error_invalid">Invalid username or password</string>
+    <string name="login_error_http">Login failed (HTTP %1$d)</string>
+    <string name="login_logo_content_description">Aadil Group</string>
+    <string name="error_server_unreachable">Face server unreachable. Check internet and try again.</string>
+
+    <!-- Attendance camera -->
+    <string name="status_look_at_camera">Look at the camera</string>
+    <string name="status_recognizing">Recognizing…</string>
+    <string name="status_no_face">No face detected, try again</string>
+    <string name="status_next_person">Next person, please</string>
+    <string name="status_camera_denied">Camera permission is required</string>
+    <string name="camera_tips">Keep face centered • Good lighting • Remove glasses</string>
+    <string name="action_logout">Logout</string>
+    <string name="logout_confirm">Log out and stop the attendance camera?</string>
+
+    <!-- Result card / speech -->
+    <string name="result_welcome">Welcome, %1$s!</string>
+    <string name="speech_welcome">Welcome %1$s</string>
+    <string name="result_default_name">there</string>
+    <string name="result_photo_description">Registered photo</string>
+    <string name="result_marked_at">Attendance marked at %1$s</string>
+    <string name="result_already_marked">Attendance already marked. Next in %1$d min</string>
+    <string name="result_not_recognised">Face not recognised</string>
+    <string name="result_not_recognised_hint">Please register on the website first</string>
+    <string name="result_error_title">Something went wrong</string>
+    <string name="result_error_http">Server error (HTTP %1$d). Trying again…</string>
+</resources>

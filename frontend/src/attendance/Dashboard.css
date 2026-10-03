@@ -1,0 +1,269 @@
+.dashboard {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(260px, 1fr);
+  grid-template-rows: auto auto;
+  gap: 16px;
+  padding: 12px 16px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+@media (max-width: 1050px) {
+  .dashboard {
+    grid-template-columns: 1fr;
+  }
+}
+
+.dashboard__panel {
+  background: #1c1f26;
+  border-radius: 12px;
+  padding: 14px 16px;
+  color: #e8e8ea;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.dashboard__panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.dashboard__voice-btn {
+  background: #282c37;
+  border: 1px solid #3d4352;
+  color: #a0a6b7;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.dashboard__voice-btn:hover {
+  background: #333846;
+  color: #e8e8ea;
+}
+
+.dashboard__voice-btn--active {
+  border-color: #3b82f6;
+  color: #60a5fa;
+  background: #1e293b;
+}
+
+.dashboard__banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  animation: slideIn 0.2s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.dashboard__banner-icon {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.dashboard__banner-text {
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+.dashboard__banner--cooldown {
+  background: #2b2615;
+  border: 1px solid #eab308;
+  color: #fef08a;
+}
+
+.dashboard__banner--cooldown strong {
+  color: #facc15;
+}
+
+.dashboard__banner--punch {
+  background: #132a1e;
+  border: 1px solid #22c55e;
+  color: #bbf7d0;
+}
+
+.dashboard__banner--punch strong {
+  color: #4ade80;
+}
+
+.dashboard__panel h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dashboard__live {
+  grid-row: span 2;
+}
+
+.dashboard__ws-status {
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.dashboard__ws-status--connected {
+  background: #1f3d2a;
+  color: #7bd88f;
+}
+
+.dashboard__ws-status--connecting {
+  background: #3d381f;
+  color: #e0c96a;
+}
+
+.dashboard__ws-status--disconnected {
+  background: #3d1f1f;
+  color: #ff8080;
+}
+
+.dashboard__live {
+  grid-row: span 2;
+}
+
+.dashboard__live-frame {
+  width: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #000;
+  margin-top: 6px;
+}
+
+.dashboard__live-frame img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 8px;
+}
+
+.dashboard__hint {
+  color: #8a92a6;
+  font-size: 0.85rem;
+}
+
+.dashboard__attendance-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 380px;
+  overflow-y: auto;
+}
+
+.dashboard__attendance-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid #2c303a;
+  border-radius: 8px;
+  padding: 8px;
+  min-width: 0;
+}
+
+.dashboard__attendance-row img {
+  width: 44px;
+  height: 44px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.dashboard__attendance-info {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.78rem;
+  color: #a9b1c3;
+  gap: 1px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.dashboard__attendance-info strong {
+  color: #e8e8ea;
+  font-size: 0.86rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dashboard__attendance-info span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dashboard__low-conf {
+  color: #ff9d5c;
+}
+
+.dashboard__unknown-grid {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-height: 380px;
+  overflow-y: auto;
+}
+
+.dashboard__unknown-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 88px;
+  border: 1px solid #2c303a;
+  border-radius: 8px;
+  padding: 6px;
+  box-sizing: border-box;
+}
+
+.dashboard__unknown-card img {
+  width: 68px;
+  height: 68px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+.dashboard__unknown-card button {
+  font-size: 0.7rem;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid #3a3f4b;
+  background: #2a2e38;
+  color: #e8e8ea;
+  cursor: pointer;
+}
+
+.dashboard__unknown-card button:hover {
+  background: #343946;
+}
+
+.dashboard__unknown-timer {
+  font-size: 0.68rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #272242;
+  border: 1px solid #6366f1;
+  color: #c7d2fe;
+  font-weight: 500;
+}

@@ -1,0 +1,57 @@
+# --- New attendance system (app/attendance/, app/web/attendance_server.py) --
+# SCRFD detection + buffalo_l pack, ByteTrack, AdaFace IR-101/WebFace12M
+# recognition, FAISS matching. See README's "AdaFace attendance system"
+# section. NOT compatible with the legacy ArcFace-based pipeline below --
+# do not mix onnxruntime (CPU) with onnxruntime-gpu in the same venv.
+onnxruntime-gpu==1.29.0     # CUDAExecutionProvider; see README for the CUDA-13 pip package LD_LIBRARY_PATH note
+insightface==2.0            # SCRFD detector (buffalo_l pack, detection module only)
+supervision==0.30.3         # sv.ByteTrack
+faiss-cpu==1.15.0            # IndexFlatIP -- exact search, fine at enrollment-list scale
+SQLAlchemy==2.0.54
+PyMySQL==1.2.3               # MySQL driver, only needed when DATABASE_URL=mysql+pymysql://...
+python-multipart==0.0.32    # FastAPI File()/Form() uploads
+torch>=2.2                  # only needed for scripts/export_adaface_onnx.py (one-time ONNX export)
+onnx>=1.16                  # only needed for scripts/export_adaface_onnx.py
+
+# Core video ingestion (RTSP via bundled FFmpeg backend)
+opencv-python>=4.9,<5
+facenet-pytorch>=2.5.0
+torchvision>=0.17.0
+
+# --- Legacy multi-detector pipeline (app/detection/, app/web/server.py) -----
+# YOLOv11n-face backend -- Ultralytics + PyTorch,
+# runs on Apple MPS/CUDA/CPU depending on what's available.
+ultralytics>=8.3
+lap>=0.5.12   # linear assignment solver used by BoT-SORT (Activity mode tracking)
+
+numpy>=1.26,<3
+python-dotenv>=1.0
+
+# OCR mode (HEAD_COUNT_SOURCE=ocr) -- app/detection/ocr_detector.py.
+# PP-OCR's text detector is a DBNet-family model (same family as DBNet++);
+# NOT MMOCR -- MMOCR's mmcv dependency has no working build for macOS arm64
+# (no CUDA, no prebuilt wheel), see README.md. Pinned exact versions since
+# PaddleOCR's API has changed across major versions.
+paddlepaddle==3.3.1
+paddleocr==3.7.0
+# paddleocr pulls in opencv-contrib-python, which installs into the same
+# `cv2` namespace as opencv-python above -- whichever lands on disk last
+# "wins" the import. Both are functionally fine here (contrib is a superset,
+# GUI functions included, and its version still satisfies the opencv-python
+# pin above) -- but if you want opencv-python specifically back on top after
+# `pip install -r requirements.txt`, run:
+#   pip install --force-reinstall --no-deps opencv-python
+
+# --- Web app (app/web/) ------------------------------------------------------
+fastapi>=0.110
+uvicorn[standard]>=0.29
+requests>=2.31   # calls the external /Recognize API (app/web/recognize_client.py)
+
+# --- Optional: only needed by scripts/discover_camera.py -------------------
+# (the main app never imports these; discovery degrades gracefully without them)
+onvif-zeep>=0.2.12
+WSDiscovery>=2.0.0
+
+# --- Dev/test ---------------------------------------------------------------
+pytest>=8.0
+psutil>=5.9   # used by scripts/benchmark.py for CPU/memory stats

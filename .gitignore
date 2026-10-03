@@ -1,0 +1,85 @@
+# Environment and credentials
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Testing and Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Node.js / Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.eslintcache
+
+# Project Data, Databases, and Stored Crops
+data/attendance/
+data/attendance_crops/
+data/recognized_faces/
+data/diagnostics/
+data/enrollment/
+data/samples/*
+!data/samples/.gitkeep
+data/known_faces/*
+!data/known_faces/.gitkeep
+data/*.db
+data/*.db-journal
+data/*.sqlite*
+data/*.faiss
+data/cameras.json
+photo/
+
+# Large Model Weights (can be re-downloaded/exported)
+models/*.pt
+models/*.onnx
+!models/.gitkeep
+!models/*.yaml
+
+# Logs
+*.log
+logs/
+
+# Operating System & IDE
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo

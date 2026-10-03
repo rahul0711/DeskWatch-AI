@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  people-counter:
+    build: .
+    container_name: people_counter_service
+    ports:
+      - "8000:8000"
+    environment:
+      - RTSP_URL=rtsp://your_rtsp_stream_url
+      - WEIGHTS_PATH=/app/weights/rfdetr_head.onnx
+      - LINE_COORDS=100,500,1100,500
+      - CONF_THRESHOLD=0.3
+      - DEVICE=cpu
+    volumes:
+      # Mount the weights folder containing the head-trained model
+      - ./weights:/app/weights
+    restart: unless-stopped
