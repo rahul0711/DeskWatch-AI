@@ -52,6 +52,39 @@ def _str_tuple(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(v.strip().lower() for v in val.split(",") if v.strip())
 
 
+_ACTIVITY_ALIASES = {
+    "sitting": "SITTING", "sit": "SITTING",
+    "standing": "STANDING", "stand": "STANDING",
+    "walking": "WALKING", "walk": "WALKING",
+    "stationary": "STATIONARY", "still": "STATIONARY", "low_movement": "STATIONARY",
+    "phone": "PHONE_INTERACTION", "phone_interaction": "PHONE_INTERACTION",
+    "monitor": "MONITOR_INTERACTION", "monitor_interaction": "MONITOR_INTERACTION",
+    "computer": "COMPUTER_INTERACTION", "pc": "COMPUTER_INTERACTION",
+    "computer_interaction": "COMPUTER_INTERACTION",
+}
+_ALL_ACTIVITY_TYPES = (
+    "SITTING", "STANDING", "WALKING", "STATIONARY",
+    "PHONE_INTERACTION", "MONITOR_INTERACTION", "COMPUTER_INTERACTION",
+)
+
+
+def normalize_activity_types(values) -> tuple[str, ...]:
+    """Map names/aliases to canonical activity types, dropping unknowns."""
+    out: list[str] = []
+    for v in values or ():
+        key = str(v).strip()
+        canon = _ACTIVITY_ALIASES.get(key.lower(), key.upper())
+        if canon in _ALL_ACTIVITY_TYPES and canon not in out:
+            out.append(canon)
+    return tuple(out)
+
+
+def _activity_types(raw: str) -> tuple[str, ...]:
+    if not raw.strip():
+        return _ALL_ACTIVITY_TYPES
+    return normalize_activity_types(raw.split(","))
+
+
 def _parse_monitor_regions(raw: str) -> dict[str, list[tuple[int, int, int, int]]]:
     """ACTIVITY_MONITOR_REGIONS -- optional fixed workstation/monitor zones.
 
@@ -161,6 +194,28 @@ class ActivityConfig:
     phone_crop_upscale: float = field(default_factory=lambda: _float("ACTIVITY_PHONE_CROP_UPSCALE", 2.0))
     phone_crop_imgsz: int = field(default_factory=lambda: _int("ACTIVITY_PHONE_CROP_IMGSZ", 640))
 
+    # --- Models trained on this site's own footage (optional) ---------------
+    # scripts/train_phone_model.py and scripts/train_posture_model.py. Empty
+    # = not used. A phone model REPLACES the stock COCO phone class (the
+    # COCO model keeps detecting people, monitors, keyboards and chairs); a
+    # posture model adds a strong vote to the sitting/standing decision.
+    phone_model: str = field(default_factory=lambda: _model_path("ACTIVITY_PHONE_MODEL"))
+    phone_model_conf: float = field(default_factory=lambda: _float("ACTIVITY_PHONE_MODEL_CONF", 0.35))
+    phone_model_imgsz: int = field(default_factory=lambda: _int("ACTIVITY_PHONE_MODEL_IMGSZ", 1280))
+    posture_model: str = field(default_factory=lambda: _model_path("ACTIVITY_POSTURE_MODEL"))
+
+    # --- Focus (live view) ------------------------------------------------------
+    # While someone watches a camera in the Phone / Body / Monitor / Computer
+    # view, body movement pauses on the other cameras and the watched one
+    # gets the GPU: checks up to this rate, and phones at this resolution.
+    focus_fps: float = field(default_factory=lambda: _float("ACTIVITY_FOCUS_FPS", 6.0))
+    focus_phone_imgsz: int = field(default_factory=lambda: _int("ACTIVITY_FOCUS_PHONE_IMGSZ", 1280))
+    # Hand zoom check: a zoomed second look around every visible hand for
+    # phones (one extra batched pass). Always on in the Phone view; this
+    # turns it on for every view too, at that extra GPU cost.
+    phone_zoom_always: bool = field(default_factory=lambda: _bool("ACTIVITY_PHONE_ZOOM_ALWAYS", False))
+    phone_zoom_conf: float = field(default_factory=lambda: _float("ACTIVITY_PHONE_ZOOM_CONF", 0.20))
+
     # --- Posture -------------------------------------------------------------
     # lower-leg-length : torso-length ratio below which a person reads as
     # seated. Determine experimentally for your camera height/angle: set
@@ -226,6 +281,65 @@ class ActivityConfig:
     )
     monitor_regions: dict[str, list[tuple[int, int, int, int]]] = field(
         default_factory=lambda: _parse_monitor_regions(os.getenv("ACTIVITY_MONITOR_REGIONS", ""))
+    )
+
+    # --- Selected activities ------------------------------------------------
+    # Which activities are analysed and stored (comma-separated; short names
+    # like "phone,monitor,sitting" work too). The admin can change this at
+    # runtime from the dashboard -- that choice is saved to
+    # data/activity_settings.json and overrides this default.
+    activity_types: tuple[str, ...] = field(
+        default_factory=lambda: _activity_types(os.getenv("ACTIVITY_TYPES", ""))
+    )
+
+    # --- Activity sessions (app/activity/sessions.py) --------------------------
+    # Stable evidence needed before a phone/monitor/computer/low-movement
+    # session starts (back-dated to the first positive pass).
+    activation_seconds: float = field(
+        default_factory=lambda: _float("ACTIVITY_ACTIVATION_SECONDS", 1.5)
+    )
+    # How long evidence may vanish (missed detection, brief occlusion)
+    # without ending the session. The session only closes after this much
+    # continuous absence, and ends at the last confirming pass.
+    session_grace_seconds: float = field(
+        default_factory=lambda: _float("ACTIVITY_SESSION_GRACE_SECONDS", 2.0)
+    )
+    # Phone sessions get a longer grace: a phone in use drops out of the
+    # detector far more often than a posture or a monitor does (tilted,
+    # covered by a thumb), and each drop used to end the session.
+    phone_grace_seconds: float = field(
+        default_factory=lambda: _float("ACTIVITY_PHONE_GRACE_SECONDS", 10.0)
+    )
+    # ...and a shorter activation: the session is back-dated to its first
+    # evidence anyway, so this only decides how soon it is CONFIRMED.
+    # Screen sessions (monitor / laptop looking, computer use): remembered
+    # screens and gaze hysteresis already steady the evidence; this grace
+    # bridges a look away to the keyboard or a colleague without splitting
+    # one sitting at the screen into many sessions.
+    # A phone use becomes a VIOLATION once its phone-use confidence (built up
+    # over passes from detector certainty and phone-in-hand strength) has
+    # reached this at least once during that use.
+    phone_violation_conf: float = field(
+        default_factory=lambda: _float("ACTIVITY_PHONE_VIOLATION_CONF", 0.5)
+    )
+    screen_grace_seconds: float = field(
+        default_factory=lambda: _float("ACTIVITY_SCREEN_GRACE_SECONDS", 5.0)
+    )
+    phone_activation_seconds: float = field(
+        default_factory=lambda: _float("ACTIVITY_PHONE_ACTIVATION_SECONDS", 0.8)
+    )
+
+    # --- Identity cache / re-identification (app/activity/identity_cache.py) -
+    # Cosine similarity (InsightFace buffalo_l embeddings) a new track's face
+    # must reach against a user's cached embeddings to be reconnected to
+    # that user, and how far it must beat the next-best user.
+    reid_threshold: float = field(default_factory=lambda: _float("ACTIVITY_REID_THRESHOLD", 0.45))
+    reid_margin: float = field(default_factory=lambda: _float("ACTIVITY_REID_MARGIN", 0.05))
+    # Face worker re-computes a tracked face's embedding this often even when
+    # nothing changed (periodic revalidation). Otherwise only on: new track,
+    # no embedding yet, face back after occlusion, or a box jump.
+    reid_revalidate_seconds: float = field(
+        default_factory=lambda: _float("ACTIVITY_REID_REVALIDATE_SECONDS", 10.0)
     )
 
     # --- Temporal state machine ---------------------------------------------
@@ -298,9 +412,12 @@ class ActivityConfig:
             return "mps"
         return "cpu"
 
-    def detector_kwargs(self, camera_id: str) -> dict:
-        """Plain picklable kwargs for ActivityDetector in the worker process."""
+    def detector_kwargs(self, camera_id: str, enabled_activities=None) -> dict:
+        """Plain picklable kwargs for ActivityDetector in the worker process.
+        enabled_activities overrides activity_types (the admin's runtime
+        selection) so the detector skips analysis nobody asked for."""
         return dict(
+            enabled_activities=tuple(enabled_activities if enabled_activities is not None else self.activity_types),
             obj_model=str(self.obj_model),
             pose_model=str(self.pose_model),
             tracker_cfg=str(self.tracker_cfg),
@@ -324,11 +441,24 @@ class ActivityConfig:
             phone_crop_pass=self.phone_crop_pass,
             phone_crop_upscale=self.phone_crop_upscale,
             phone_crop_imgsz=self.phone_crop_imgsz,
+            phone_model=self.phone_model,
+            phone_model_conf=self.phone_model_conf,
+            phone_model_imgsz=self.phone_model_imgsz,
+            posture_model=self.posture_model,
+            focus_phone_imgsz=self.focus_phone_imgsz,
+            phone_zoom_always=self.phone_zoom_always,
+            phone_zoom_conf=self.phone_zoom_conf,
             use_fp16=self.use_fp16,
         )
 
     def enabled_for(self, camera_id: str) -> bool:
         return camera_id.lower() in self.cameras
+
+
+def _model_path(env_name: str) -> str:
+    """Optional model file from .env, relative to the project root; "" when unset."""
+    value = os.getenv(env_name, "").strip()
+    return str(ROOT / value) if value else ""
 
 
 def load_activity_config() -> ActivityConfig:

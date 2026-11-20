@@ -720,6 +720,14 @@
   cursor: default;
 }
 
+.login__card button.login__secondary {
+  margin-top: 0;
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--panel-border);
+  font-weight: 500;
+}
+
 /* ==========================================================================
    Add Camera Modal — Premium Dark Theme
    ========================================================================== */
@@ -1224,6 +1232,47 @@
 }
 
 /* Activity table (ActivityTable.jsx) */
+.activity__summary {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.activity__top {
+  color: #ffc857;
+}
+
+.activity tr.activity__leader td {
+  background: rgba(255, 200, 87, 0.08);
+}
+
+.activity tr.activity__zero td {
+  opacity: 0.45;
+}
+
+.activity__selector {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+
+.activity__choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.activity__error {
+  color: #ff6b4a;
+}
+
+.activity tr.activity__away td {
+  opacity: 0.55;
+}
+
 .activity__anon {
   color: var(--text-dim);
 }
@@ -1235,4 +1284,120 @@
 .activity__dim {
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
+}
+
+/* Admin / Super Admin layout: sidebar that says what each page does */
+.app--sidebar {
+  display: grid;
+  grid-template-columns: 270px minmax(0, 1fr);
+  gap: 24px;
+  padding: 0 24px 0 0;
+}
+
+.app__sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  border-right: 1px solid var(--panel-border);
+  background: var(--panel);
+  padding: 20px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.app__sidebar h1 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 6px;
+}
+
+.app__nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.app__nav-title {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin: 0 6px 4px;
+}
+
+.app__nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.app__nav-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.app__nav-item--active {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--panel-border);
+}
+
+.app__nav-label {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.app__nav-desc {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-dim);
+}
+
+.app__sidebar-user {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.app__sidebar-user div {
+  display: flex;
+  gap: 8px;
+}
+
+.app__main {
+  padding: 24px 0 48px;
+  min-width: 0;
+}
+
+.activity__top {
+  font-size: 18px !important;
+}
+
+@media (max-width: 900px) {
+  .app--sidebar {
+    grid-template-columns: 1fr;
+    padding: 0 16px;
+  }
+
+  .app__sidebar {
+    position: static;
+    height: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--panel-border);
+    margin: 0 -16px;
+  }
 }

@@ -83,3 +83,12 @@ desktop.ini
 .vscode/
 *.swp
 *.swo
+
+# .NET backend build output (run_all.sh builds into .dotnet-run/)
+.dotnet-run/
+CCTV_Backend_Project/**/bin/
+CCTV_Backend_Project/**/obj/
+CCTV_Backend_Project/.vs/
+
+# Training datasets (large; regenerate with scripts/)
+data/training/

@@ -27,7 +27,7 @@ from app.attendance.events import event_bus
 from app.attendance.pipeline import get_detector, get_embedder, get_index, init_pipeline
 from app.attendance.worker import RecognitionWorker
 from app.web.attendance_routes import router as attendance_router
-from app.web.auth import DEMO_TOKEN, check_credentials
+from app.web.auth import ADMIN_OR_ABOVE, DEMO_TOKEN, check_credentials, jwt_enabled, principal_from_token
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(name)s: %(message)s")
 logger = logging.getLogger("attendance_web")
@@ -72,6 +72,9 @@ class LoginRequest(BaseModel):
 
 @app.post("/api/login")
 def login(body: LoginRequest) -> dict:
+    if jwt_enabled():
+        # Real logins live in MySQL and are checked by the .NET backend.
+        raise HTTPException(status_code=410, detail="Log in through the .NET backend: POST /api/db/auth/login")
     if not check_credentials(body.username, body.password):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     return {"token": DEMO_TOKEN}
@@ -82,8 +85,14 @@ app.include_router(attendance_router)
 
 @app.websocket("/ws/events")
 async def ws_events(websocket: WebSocket, token: str | None = None):
-    if token != DEMO_TOKEN:
+    # Live attendance events feed the Dashboard: Super Admin and Admin only.
+    try:
+        principal = principal_from_token(token)
+    except HTTPException:
         await websocket.close(code=4401)
+        return
+    if principal.role not in ADMIN_OR_ABOVE:
+        await websocket.close(code=4403)
         return
     await websocket.accept()
     event_bus.add_client(websocket)

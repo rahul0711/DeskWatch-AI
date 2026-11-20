@@ -160,7 +160,9 @@ class FacePipeline:
 
         self._activity_always_on = activity_always_on and self._activity_worker is not None
         self._min_activity_interval = 1.0 / activity_fps if activity_fps > 0 else 0.0
+        self._base_activity_interval = self._min_activity_interval
         self._last_activity_time = 0.0
+        self._activity_paused = False
 
         if "ocr" in enabled_detectors:
             self._ocr_worker = ProcessDetectionWorker(
@@ -276,7 +278,11 @@ class FacePipeline:
                 active_worker = self._person_worker
             elif self._head_count_source == "attendance" and self._attendance_worker is not None:
                 active_worker = self._attendance_worker
-            elif self._head_count_source == "activity" and self._activity_worker is not None:
+            elif (
+                self._head_count_source == "activity"
+                and self._activity_worker is not None
+                and not self._activity_paused
+            ):
                 active_worker = self._activity_worker
             elif self._head_count_source == "ocr" and self._ocr_worker is not None:
                 active_worker = self._ocr_worker
@@ -309,6 +315,7 @@ class FacePipeline:
         # far more expensive per frame.
         if (
             self._activity_always_on
+            and not self._activity_paused
             and self._head_count_source != "activity"
             and now - self._last_activity_time >= self._min_activity_interval
         ):
@@ -366,7 +373,11 @@ class FacePipeline:
 
         # Concurrent activity results, read regardless of which mode is
         # driving the display/head-count path above.
-        if self._activity_always_on and self._head_count_source != "activity":
+        if self._activity_paused:
+            # Nothing new is analysed while paused; drawing the last result
+            # would freeze stale boxes on screen.
+            tracked_activity = []
+        elif self._activity_always_on and self._head_count_source != "activity":
             activity_result = self._activity_worker.latest_result()
             ran_activity = activity_result.sequence != self._last_activity_seq
             if ran_activity:
@@ -391,6 +402,33 @@ class FacePipeline:
             tracked_ocr=tracked_ocr,
             frame_captured_ts=frame_obj.timestamp,
         )
+
+    def set_activity_focus(self, paused: bool, focus: Optional[str], focus_fps: float) -> None:
+        """Live-view focus (app/web/server.py). paused: another camera has
+        the GPU -- submit no activity frames. focus: this camera is being
+        watched in that view -- check up to focus_fps, and tell the
+        detector (it raises the phone resolution in the Phone view)."""
+        self._activity_paused = paused
+        if focus and focus_fps > 0:
+            self._min_activity_interval = 1.0 / focus_fps
+        else:
+            self._min_activity_interval = self._base_activity_interval
+        if self._activity_worker is not None:
+            self._activity_worker.set_control(focus)
+
+    def restart_activity_worker(self, activity_kwargs: dict) -> bool:
+        """Replace the activity worker with one built from new kwargs (the
+        admin changed which activities are analysed). Returns False when this
+        pipeline has no activity worker. Results resume once the new
+        process has loaded its models; the parent-side state is untouched."""
+        if self._activity_worker is None:
+            return False
+        old = self._activity_worker
+        self._activity_worker = ProcessDetectionWorker(ActivityDetector, activity_kwargs).start()
+        self._activity_worker.set_control(getattr(old, "_control", None))  # keep the live-view focus
+        self._last_activity_seq = 0
+        old.stop()
+        return True
 
     def close(self) -> None:
         for worker in (

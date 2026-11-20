@@ -246,6 +246,8 @@ def list_users() -> list[dict]:
                 "employee_id": u.employee_id,
                 "name": u.name,
                 "created_at": to_utc_iso(u.created_at),
+                # Cameras this person is NOT allowed on (Register page).
+                "blocked_cameras": sorted(r.camera_id for r in u.camera_restrictions),
                 "faces": [
                     {
                         "id": f.id,

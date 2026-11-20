@@ -12,8 +12,7 @@ export default function LoginPage({ onLoggedIn }) {
     setBusy(true)
     setError(null)
     try {
-      await login(username, password)
-      onLoggedIn()
+      onLoggedIn(await login(username.trim(), password))
     } catch (err) {
       setError(err.message)
     } finally {
@@ -28,7 +27,7 @@ export default function LoginPage({ onLoggedIn }) {
         <p className="login__subtitle">Sign in to view live cameras</p>
 
         <label className="login__field">
-          Username
+          Username or email
           <input
             value={username}
             onChange={(e) => setUsername(e.target.value)}

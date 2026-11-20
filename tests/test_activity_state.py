@@ -47,14 +47,14 @@ def test_single_frame_flicker_does_not_switch_state():
     for _ in range(10):
         m.update([Obs(17, posture="sitting")], {17: 0.0}, t)
         t += 0.25
-    assert m.states[17].primary.value == Activity.SITTING
+    assert m.state_for_track(17).primary.value == Activity.SITTING
 
     # One bad frame says standing -- must NOT flip (needs 2s of agreement).
     events = m.update([Obs(17, posture="standing")], {17: 0.0}, t)
     t += 0.25
     m.update([Obs(17, posture="sitting")], {17: 0.0}, t)
     assert events == []
-    assert m.states[17].primary.value == Activity.SITTING
+    assert m.state_for_track(17).primary.value == Activity.SITTING
 
 
 def test_sustained_change_switches_and_closes_event_with_duration():
@@ -76,7 +76,7 @@ def test_sustained_change_switches_and_closes_event_with_duration():
     # confirmation window.
     assert 9.0 <= ev.duration_seconds <= 11.0
     assert ev.end_time > ev.start_time
-    assert m.states[17].primary.value == Activity.STANDING
+    assert m.state_for_track(17).primary.value == Activity.STANDING
 
 
 def test_stationary_requires_min_duration_then_runs_until_movement():
@@ -87,19 +87,19 @@ def test_stationary_requires_min_duration_then_runs_until_movement():
     m.update([Obs(17)], {17: 0.0}, t)
     t += 1.0
     m.update([Obs(17)], {17: 0.0}, t)
-    assert m.states[17].stationary.value is False
+    assert m.state_for_track(17).is_on("stationary") is False
 
     for _ in range(40):  # plenty of low-movement time
         t += 0.25
         m.update([Obs(17)], {17: 0.0}, t)
-    assert m.states[17].stationary.value is True
-    assert m.states[17].stationary_seconds(t) > 3.0
+    assert m.state_for_track(17).is_on("stationary") is True
+    assert m.state_for_track(17).stationary_seconds(t) > 3.0
 
     # Real movement ends it (after the debounce).
     for _ in range(20):
         t += 0.25
         m.update([Obs(17)], {17: 0.5}, t)
-    assert m.states[17].stationary.value is False
+    assert m.state_for_track(17).is_on("stationary") is False
 
 
 def test_phone_interaction_event_has_duration_and_confidence():
@@ -177,7 +177,7 @@ def test_track_loss_closes_open_events_and_emits_presence():
     kinds = {e.activity_type for e in closed}
     assert Activity.PRESENCE in kinds
     assert Activity.SITTING in kinds
-    assert 17 not in m.states
+    assert m.state_for_track(17) is None
 
     presence = next(e for e in closed if e.activity_type == Activity.PRESENCE)
     # Presence ends at last_seen, not at the expiry check -- the grace
@@ -206,7 +206,7 @@ def test_walking_overrides_posture_when_movement_is_high():
     for _ in range(40):
         m.update([Obs(17, posture="standing")], {17: 0.9}, t)
         t += 0.25
-    assert m.states[17].primary.value == Activity.WALKING
+    assert m.state_for_track(17).primary.value == Activity.WALKING
 
 
 def test_display_priority_phone_over_monitor_over_primary():
@@ -215,7 +215,7 @@ def test_display_priority_phone_over_monitor_over_primary():
     for _ in range(40):
         m.update([Obs(17, posture="sitting", monitor_facing=True)], {17: 0.0}, t)
         t += 0.25
-    assert m.states[17].display_activity == Activity.MONITOR_INTERACTION
+    assert m.state_for_track(17).display_activity == Activity.MONITOR_INTERACTION
 
     for _ in range(40):
         m.update(
@@ -223,7 +223,7 @@ def test_display_priority_phone_over_monitor_over_primary():
             {17: 0.0}, t,
         )
         t += 0.25
-    assert m.states[17].display_activity == Activity.PHONE_INTERACTION
+    assert m.state_for_track(17).display_activity == Activity.PHONE_INTERACTION
 
 
 # --- movement analyzer -------------------------------------------------
@@ -277,7 +277,7 @@ def test_alternating_posture_still_settles_on_the_majority():
         posture = "standing" if i % 4 == 3 else "sitting"
         m.update([Obs(17, posture=posture)], {17: 0.0}, t)
         t += 0.25
-    assert m.states[17].primary.value == Activity.SITTING
+    assert m.state_for_track(17).primary.value == Activity.SITTING
 
 
 def test_evenly_split_posture_does_not_flap():
@@ -295,7 +295,7 @@ def test_evenly_split_posture_does_not_flap():
         switches += len([e for e in events if e.activity_type in (Activity.SITTING, Activity.STANDING)])
         t += 0.25
     assert switches == 0
-    assert m.states[17].primary.value == Activity.SITTING
+    assert m.state_for_track(17).primary.value == Activity.SITTING
 
 
 def test_ghost_tracks_emit_no_events_but_still_total():
@@ -310,7 +310,7 @@ def test_ghost_tracks_emit_no_events_but_still_total():
     t += 11.0  # past track_grace_seconds
     events = m.update([], {}, t)
     assert events == []
-    assert 99 not in m.states
+    assert m.state_for_track(99) is None and not m.states
 
 
 def test_established_track_still_emits_events():

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { addFace, deleteFace, deleteUser, fetchUsers, registerUser, renameUser } from './api'
-import { AuthError } from '../api'
+import { addFace, deleteFace, deleteUser, fetchUsers, registerUser, renameUser, setCameraAccess } from './api'
+import { AuthError, hasRole } from '../api'
+import { fetchDbCameras } from '../db/api'
 import './RegistrationPage.css'
 
 const ANGLE_GUIDES = [
@@ -30,6 +31,11 @@ export default function RegistrationPage({ onAuthError, prefillImage, onPrefillC
   const [editingId, setEditingId] = useState(null)
   const [editName, setEditName] = useState('')
   const [savingName, setSavingName] = useState(false)
+  const [cameras, setCameras] = useState([]) // [{ id, name, number }] -- this login's cameras
+  const canDeletePerson = hasRole('SUPER_ADMIN')
+  const [savingAccess, setSavingAccess] = useState(null) // user id being saved
+  // Cameras a NEW registration will be blocked on (unticked in the form).
+  const [newBlocked, setNewBlocked] = useState([])
 
   const guideIndex = Math.min(captured.length, ANGLE_GUIDES.length - 1)
 
@@ -47,6 +53,43 @@ export default function RegistrationPage({ onAuthError, prefillImage, onPrefillC
   useEffect(() => {
     loadUsers()
   }, [loadUsers])
+
+  useEffect(() => {
+    fetchDbCameras()
+      // Only the cameras this login may manage, numbered Camera 1, 2, 3 as in the database.
+      .then((list) =>
+        setCameras(list.filter((c) => c.is_active).map((c) => ({ id: c.camera_id, name: c.name, number: c.camera_no }))),
+      )
+      .catch((err) => {
+        if (err instanceof AuthError) onAuthError()
+      })
+  }, [onAuthError])
+
+  // Checked = allowed. Unticking a camera blocks this person there.
+  async function toggleCamera(user, cameraId, allowed) {
+    const blocked = new Set(user.blocked_cameras || [])
+    if (allowed) blocked.delete(cameraId)
+    else blocked.add(cameraId)
+    setSavingAccess(user.id)
+    try {
+      const saved = await setCameraAccess(user.id, [...blocked])
+      setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, blocked_cameras: saved.blocked_cameras } : u)))
+    } catch (err) {
+      if (err instanceof AuthError) onAuthError()
+      else alert(err.message)
+    } finally {
+      setSavingAccess(null)
+    }
+  }
+
+  function cameraLabel(c) {
+    return `Camera ${c.number} · ${c.name}`
+  }
+
+  function cameraName(id) {
+    const c = cameras.find((cam) => cam.id === id)
+    return c ? cameraLabel(c) : id
+  }
 
   useEffect(() => {
     let stream
@@ -112,7 +155,15 @@ export default function RegistrationPage({ onAuthError, prefillImage, onPrefillC
       const result = await registerUser(name.trim(), employeeId.trim(), captured)
       setSubmitResults(result.images)
       const anyAccepted = result.images.some((r) => r.accepted)
+      if (anyAccepted && newBlocked.length > 0 && result.user?.id) {
+        try {
+          await setCameraAccess(result.user.id, newBlocked)
+        } catch (err) {
+          setSubmitError(`Registered, but camera access was not saved: ${err.message}`)
+        }
+      }
       if (anyAccepted) {
+        setNewBlocked([])
         setName('')
         setEmployeeId('')
         captured.forEach((c) => URL.revokeObjectURL(c.previewUrl))
@@ -238,6 +289,33 @@ export default function RegistrationPage({ onAuthError, prefillImage, onPrefillC
             Employee ID
             <input value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} required />
           </label>
+          {cameras.length > 0 && (
+            <fieldset className="registration__access registration__access--form">
+              <legend className="registration__access-label">Allowed cameras</legend>
+              {cameras.map((c) => {
+                const allowed = !newBlocked.includes(c.id)
+                return (
+                  <label
+                    key={c.id}
+                    className={`registration__access-choice${allowed ? '' : ' registration__access-choice--blocked'}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={allowed}
+                      disabled={submitting}
+                      onChange={(e) =>
+                        setNewBlocked((prev) =>
+                          e.target.checked ? prev.filter((id) => id !== c.id) : [...prev, c.id],
+                        )
+                      }
+                    />
+                    {cameraLabel(c)}
+                  </label>
+                )
+              })}
+              <span className="registration__hint">Untick a camera to show a &quot;not welcome&quot; alert when this person is seen there.</span>
+            </fieldset>
+          )}
           <button type="submit" disabled={submitting || captured.length === 0}>
             {submitting ? 'Registering…' : `Register (${captured.length} angle${captured.length === 1 ? '' : 's'})`}
           </button>
@@ -266,7 +344,10 @@ export default function RegistrationPage({ onAuthError, prefillImage, onPrefillC
 
         <div className="registration__users">
           {users?.map((u) => (
-            <div key={u.id} className="registration__user-card">
+            <div
+              key={u.id}
+              className={`registration__user-card${u.blocked_cameras?.length ? ' registration__user-card--restricted' : ''}`}
+            >
               <div className="registration__user-header">
                 {editingId === u.id ? (
                   <form
@@ -296,6 +377,14 @@ export default function RegistrationPage({ onAuthError, prefillImage, onPrefillC
                   <div>
                     <strong>{u.name}</strong>
                     <span className="registration__user-empid"> · {u.employee_id}</span>
+                    {u.blocked_cameras?.length > 0 && (
+                      <span
+                        className="registration__restricted-badge"
+                        title={`Not allowed on: ${u.blocked_cameras.map(cameraName).join(', ')}`}
+                      >
+                        🚫 Restricted
+                      </span>
+                    )}
                   </div>
                 )}
                 <div className="registration__user-actions">
@@ -304,9 +393,11 @@ export default function RegistrationPage({ onAuthError, prefillImage, onPrefillC
                       Edit
                     </button>
                   )}
-                  <button type="button" className="registration__delete-user" onClick={() => handleDeleteUser(u.id)}>
-                    Delete
-                  </button>
+                  {canDeletePerson && (
+                    <button type="button" className="registration__delete-user" onClick={() => handleDeleteUser(u.id)}>
+                      Delete
+                    </button>
+                  )}
                 </div>
               </div>
               <div className="registration__thumbs">
@@ -332,6 +423,29 @@ export default function RegistrationPage({ onAuthError, prefillImage, onPrefillC
                   />
                 </label>
               </div>
+              {cameras.length > 0 && (
+                <div className="registration__access">
+                  <span className="registration__access-label">Allowed cameras:</span>
+                  {cameras.map((c) => {
+                    const allowed = !(u.blocked_cameras || []).includes(c.id)
+                    return (
+                      <label
+                        key={c.id}
+                        className={`registration__access-choice${allowed ? '' : ' registration__access-choice--blocked'}`}
+                        title={allowed ? 'Allowed here -- untick to block' : 'Not welcome here -- an alert shows when seen on this camera'}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={allowed}
+                          disabled={savingAccess === u.id}
+                          onChange={(e) => toggleCamera(u, c.id, e.target.checked)}
+                        />
+                        {cameraLabel(c)}
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           ))}
         </div>

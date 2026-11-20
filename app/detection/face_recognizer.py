@@ -104,6 +104,34 @@ class FaceRecognizer:
             logger.error("Error computing face embedding: %s", e)
             return None
 
+    def embed(self, face_crop: np.ndarray) -> np.ndarray | None:
+        """L2-normalised ArcFace embedding for a face crop, or None. Used by
+        the activity layer's identity cache to re-identify a person whose
+        track id changed (app/activity/identity_cache.py)."""
+        return self._compute_embedding(face_crop)
+
+    def match_embedding(self, embedding: np.ndarray | None) -> tuple[str, float]:
+        """Match an already-computed embedding against data/known_faces/.
+        Returns (name, distance); name is "Unknown" past the threshold."""
+        try:
+            current_mtime = self.known_faces_dir.stat().st_mtime if self.known_faces_dir.exists() else 0.0
+            if current_mtime > self.last_mtime:
+                logger.info("Known faces directory modified. Reloading...")
+                self.load_known_faces()
+        except Exception as e:
+            logger.error("Failed to check mtime of known_faces_dir: %s", e)
+
+        if embedding is None or not self.known_embeddings:
+            return "Unknown", 1.0
+        best_name, best_dist = "Unknown", 2.0
+        for name, known_emb in self.known_embeddings.items():
+            dist = float(np.linalg.norm(embedding - known_emb))
+            if dist < best_dist:
+                best_dist, best_name = dist, name
+        if best_dist <= self.distance_threshold:
+            return best_name, best_dist
+        return "Unknown", best_dist
+
     def recognize(self, face_crop: np.ndarray) -> tuple[str, float]:
         """Compare face crop against known faces.
 

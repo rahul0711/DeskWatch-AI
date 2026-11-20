@@ -3,6 +3,7 @@
 // same reverse proxy as the API so these relative paths keep working.
 
 const TOKEN_KEY = 'cctv_token'
+const USER_KEY = 'cctv_user'
 
 export class AuthError extends Error {
   constructor(message = 'Not authenticated') {
@@ -21,6 +22,26 @@ export function setToken(token) {
 
 export function clearToken() {
   sessionStorage.removeItem(TOKEN_KEY)
+  sessionStorage.removeItem(USER_KEY)
+}
+
+// The logged-in login from the .NET backend: { id, username, full_name, role,
+// role_name, must_change_password, all_cameras, cameras[] }.
+export function getUser() {
+  try {
+    return JSON.parse(sessionStorage.getItem(USER_KEY) || 'null')
+  } catch {
+    return null
+  }
+}
+
+export function setUser(user) {
+  sessionStorage.setItem(USER_KEY, JSON.stringify(user))
+}
+
+// Role checks for showing/hiding buttons. The backends enforce the same rules.
+export function hasRole(...roles) {
+  return roles.includes(getUser()?.role)
 }
 
 function authHeaders() {
@@ -28,19 +49,28 @@ function authHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
+// Logins live in MySQL and are checked by the .NET backend
+// (CCTV_Backend_Project, proxied at /api/db). Its token is accepted by the
+// Python servers too.
 export async function login(username, password) {
-  const res = await fetch('/api/login', {
+  const res = await fetch('/api/db/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
   })
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
-    throw new Error(body.detail || `Login failed (${res.status})`)
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body.detail || `Login failed (${res.status})`)
+  setToken(body.token)
+  setUser(body.user)
+  return body.user
+}
+
+export async function logout() {
+  try {
+    await fetch('/api/db/auth/logout', { method: 'POST', headers: authHeaders() })
+  } finally {
+    clearToken()
   }
-  const data = await res.json()
-  setToken(data.token)
-  return data.token
 }
 
 export async function fetchCameras() {
@@ -112,6 +142,28 @@ export async function fetchActivity(cameraId) {
   })
   if (res.status === 401) throw new AuthError()
   if (!res.ok) throw new Error(`GET activity -> ${res.status}`)
+  return res.json()
+}
+
+// Admin-selected activity list: which activities are analysed and stored.
+export async function fetchActivitySettings() {
+  const res = await fetch('/api/activity/settings', { headers: authHeaders() })
+  if (res.status === 401) throw new AuthError()
+  if (!res.ok) throw new Error(`GET activity settings -> ${res.status}`)
+  return res.json()
+}
+
+export async function saveActivitySettings(enabledActivities) {
+  const res = await fetch('/api/activity/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ enabled_activities: enabledActivities }),
+  })
+  if (res.status === 401) throw new AuthError()
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}))
+    throw new Error(detail.detail || `PUT activity settings -> ${res.status}`)
+  }
   return res.json()
 }
 

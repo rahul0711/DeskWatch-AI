@@ -192,6 +192,29 @@ def _draw_debug_track(frame: np.ndarray, t) -> None:
     _draw_label_block(frame, x1, y1, lines, _DEBUG_BG)
 
 
+_SHORT_ACTIVITY = {
+    "PHONE_INTERACTION": "PHONE",
+    "MONITOR_INTERACTION": "MONITOR",
+    "COMPUTER_INTERACTION": "PC",
+    "STATIONARY": "STILL",
+}
+
+
+_INACTIVE_COLOR = (140, 140, 140)
+
+
+def _draw_inactive_track(frame: np.ndarray, t) -> None:
+    """A person not doing the filtered activity: thin grey box, name only."""
+    x1, y1, x2, y2 = t.face.bbox
+    cv2.rectangle(frame, (x1, y1), (x2, y2), _INACTIVE_COLOR, 1)
+    name = t.name if t.name and t.name != "Unknown" else "Track"
+    label = f"{name} #{t.track_id}"
+    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+    ly = max(th + 6, y1)
+    cv2.rectangle(frame, (x1, ly - th - 6), (x1 + tw + 6, ly), _INACTIVE_COLOR, -1)
+    cv2.putText(frame, label, (x1 + 3, ly - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1, cv2.LINE_AA)
+
+
 def _draw_activity_tracks(
     frame: np.ndarray,
     tracked: list,
@@ -214,15 +237,24 @@ def _draw_activity_tracks(
 
     for t in tracked:
         if not _passes_filter(t, activity_filter):
+            # Phone / Monitor / Computer views still show everyone, faintly,
+            # so people stay on screen continuously and only the highlight
+            # comes and goes with the activity.
+            _draw_inactive_track(frame, t)
             continue
         x1, y1, x2, y2 = t.face.bbox
         activity = getattr(t, "activity", "UNKNOWN") or "UNKNOWN"
         if activity_filter == "body":
+            # The confirmed posture once there is one; until then (just after
+            # switching views) what the detector sees right now, so the label
+            # appears at once. Recording still waits for the confirmation.
             primary = getattr(t, "primary_activity", None)
-            activity = primary or (t.posture.upper() if t.posture != "unknown" else "UNKNOWN")
+            if primary in (None, "", "UNKNOWN"):
+                primary = t.posture.upper() if t.posture != "unknown" else "UNKNOWN"
+            activity = primary
         color = _ACTIVITY_LABEL_COLORS.get(activity, _POSTURE_COLORS.get(t.posture, (150, 150, 150)))
 
-        if t.monitor_bbox is not None:
+        if t.monitor_bbox is not None and activity_filter in ("all", "monitor"):
             mx1, my1, mx2, my2 = t.monitor_bbox
             cv2.rectangle(frame, (mx1, my1), (mx2, my2), _MONITOR_COLOR, 1)
             cv2.line(frame, ((mx1 + mx2) // 2, (my1 + my2) // 2),
@@ -239,29 +271,33 @@ def _draw_activity_tracks(
 
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
-        name = t.name if t.name and t.name != "Unknown" else f"Track {t.track_id}"
-        lines = [
-            f"{name}  #{t.track_id}",
-            f"{activity}  {_fmt_dur(getattr(t, 'activity_seconds', 0.0))}",
-        ]
-        head = getattr(t, "head_orientation", "UNKNOWN")
-        if head and head != "UNKNOWN":
-            lines.append(f"Head: {head}")
-
-        extras = []
+        # One short line, so the label covers as little of the scene as
+        # possible: "Rahul #3 | PHONE 2s +MONITOR". Head direction and
+        # movement score are in the Debug view.
+        name = t.name if t.name and t.name != "Unknown" else "Track"
+        short = _SHORT_ACTIVITY.get(activity, activity)
+        parts = [f"{name} #{t.track_id}", f"{short} {_fmt_dur(getattr(t, 'activity_seconds', 0.0))}"]
+        if activity_filter in ("phone", "monitor", "computer"):
+            # Focused view: how long this session has run, and the total.
+            label = {"phone": "PHONE", "monitor": "SCREEN", "computer": "PC"}[activity_filter]
+            parts = [
+                f"{name} #{t.track_id}",
+                f"{label} {_fmt_dur(getattr(t, f'{activity_filter}_session_seconds', 0.0))}",
+                f"total {_fmt_dur(getattr(t, f'{activity_filter}_total_seconds', 0.0))}",
+            ]
+            if activity_filter == "phone":
+                parts.append(f"{round(100 * getattr(t, 'phone_use_confidence', 0.0))}%")
+        also = []
         if activity_filter in ("all", "phone") and t.phone_in_use:
-            extras.append("PHONE")
+            also.append("PHONE")
         if activity_filter in ("all", "computer") and t.computer_in_use:
-            extras.append("PC")
+            also.append("PC")
         if activity_filter in ("all", "monitor") and t.monitor_facing:
-            extras.append("MONITOR")
-        stationary = getattr(t, "stationary_seconds", 0.0)
-        if stationary > 0 and activity_filter in ("all", "body"):
-            extras.append(f"still {_fmt_dur(stationary)}")
-        if activity_filter in ("all", "body"):
-            extras.append(f"move {getattr(t, 'movement_score', 0.0):.2f}")
-        if extras:
-            lines.append("  ".join(extras))
+            also.append("MONITOR")
+        also = [a for a in also if a != short]
+        if also and activity_filter not in ("phone", "monitor", "computer"):
+            parts.append("+" + " +".join(also))
+        lines = [" | ".join(parts)]
 
         _draw_label_block(frame, x1, y1, lines, color)
 

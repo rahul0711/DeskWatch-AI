@@ -29,11 +29,12 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import os
 import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import ClassVar, Optional
 
@@ -51,13 +52,26 @@ from app.activity import (
     Identity,
     load_activity_config,
 )
+from app.activity.config import normalize_activity_types
+from app.activity.settings import load_enabled_activities, save_enabled_activities
+from app.attendance.access import AccessPolicy
+from app.web.camera_features import CameraFeatures, features_for, load_camera_features
 from app.camera.rtsp_stream import RTSPStream
 from app.config import AppConfig, CameraConfig, load_config
 from app.detection.face_detector import align_face
 from app.processing.pipeline import FacePipeline, PipelineResult
 from app.tracking.simple_tracker import TrackedFace
 from app.ui.display import ACTIVITY_FILTERS, draw_overlay
-from app.web.auth import DEMO_TOKEN, check_credentials, require_token
+from app.web.auth import (
+    DEMO_TOKEN,
+    SUPER_ADMIN,
+    Principal,
+    check_credentials,
+    jwt_enabled,
+    require_camera,
+    require_roles,
+    require_token,
+)
 from app.web.recognize_client import recognize_face
 
 # Without this, INFO-level logs (camera startup, RTSP URLs, "serving built
@@ -83,6 +97,127 @@ _STREAM_PUSH_INTERVAL_S = 1 / 20
 _OCR_MIN_VOTES_TO_CONFIRM = 2
 
 _sessions: dict[str, "CameraWebSession"] = {}
+# Camera access rules from the Register page, shared by every camera
+# session; re-read from the database every few seconds.
+_access_policy = AccessPolicy()
+
+
+class _AttendanceRecorder:
+    """Marks attendance for REGISTERED people recognised on ANY camera.
+
+    Attendance used to be written only by the separate attendance server
+    (app/web/attendance_server.py), which watches one camera
+    (ATTENDANCE_CAMERA_INDEX). With that camera down, people recognised on
+    every other camera were shown by name but marked absent. This writes the
+    same attendance_events rows from every camera with Face on.
+
+    One punch per person per PUNCH_COOLDOWN_SECONDS (default 10 min), shared
+    by all cameras AND the attendance server: the last punch is checked in
+    the database, so the two never double-count. Database work runs off the
+    render thread.
+    """
+
+    def __init__(self) -> None:
+        from app.attendance.config import load_attendance_config
+
+        self._cfg = load_attendance_config()
+        self._enabled = os.getenv("ATTENDANCE_ALL_CAMERAS", "true").strip().lower() not in ("0", "false", "no")
+        self._lock = threading.Lock()
+        self._last: dict[int, float] = {}       # user_id -> time.time() of last punch / check
+        self._busy: set[int] = set()
+
+    def offer(self, camera_name: str, tracked: list, frame) -> None:
+        if not self._enabled or frame is None:
+            return
+        now = time.time()
+        for t in tracked:
+            uid = getattr(t, "registered_user_id", None)
+            if uid is None:
+                continue
+            with self._lock:
+                if uid in self._busy or now - self._last.get(uid, 0.0) < self._cfg.punch_cooldown_seconds:
+                    continue
+                self._busy.add(uid)
+            x1, y1, x2, y2 = t.face.bbox
+            mx, my = int((x2 - x1) * 0.25), int((y2 - y1) * 0.25)
+            fh, fw = frame.shape[:2]
+            crop = frame[max(0, y1 - my):min(fh, y2 + my), max(0, x1 - mx):min(fw, x2 + mx)].copy()
+            threading.Thread(
+                target=self._punch, args=(uid, camera_name, crop, float(t.registered_score), x2 - x1),
+                daemon=True, name=f"attendance-{uid}",
+            ).start()
+
+    def _punch(self, uid: int, camera_name: str, crop, score: float, face_w: int) -> None:
+        from sqlalchemy import select
+
+        from app.attendance.db import AttendanceEvent, get_session
+
+        now = time.time()
+        try:
+            with get_session() as session:
+                last = session.execute(
+                    select(AttendanceEvent.timestamp).where(AttendanceEvent.user_id == uid)
+                    .order_by(AttendanceEvent.timestamp.desc()).limit(1)
+                ).scalar()
+                if last is not None:
+                    if last.tzinfo is None:
+                        last = last.replace(tzinfo=timezone.utc)
+                    age = now - last.timestamp()
+                    if 0 <= age < self._cfg.punch_cooldown_seconds:
+                        with self._lock:
+                            self._last[uid] = now - age      # punched elsewhere already
+                        return
+                self._cfg.attendance_crops_dir.mkdir(parents=True, exist_ok=True)
+                path = self._cfg.attendance_crops_dir / f"{uuid.uuid4().hex}.jpg"
+                if crop is not None and crop.size:
+                    cv2.imwrite(str(path), crop)
+                session.add(AttendanceEvent(
+                    user_id=uid, camera_name=camera_name, confidence=score, face_width_px=int(face_w),
+                    low_confidence=face_w < self._cfg.low_confidence_face_px, thumbnail_path=str(path),
+                ))
+                session.commit()
+            with self._lock:
+                self._last[uid] = now
+            logger.info("[%s] Attendance marked for registered user %s (cos=%.2f)", camera_name, uid, score)
+        except Exception:
+            logger.exception("[%s] Could not record attendance for user %s", camera_name, uid)
+        finally:
+            with self._lock:
+                self._busy.discard(uid)
+
+
+_attendance = _AttendanceRecorder()
+# How long a "not welcome" alert stays up after the person was last matched
+# -- long enough that a turned head doesn't make the banner blink.
+_ACCESS_ALERT_HOLD_S = 8.0
+
+
+def _draw_access_alerts(frame: np.ndarray, alerts: list[dict]) -> None:
+    """Red box around each unwelcome person's face with a small tag UNDER it
+    (activity labels sit above people, so the two never overlap), and a slim
+    banner along the BOTTOM edge -- the top carries the camera's own clock.
+    The web page shows its own banner too; this one is for the bare stream."""
+    if not alerts:
+        return
+    h, w = frame.shape[:2]
+    for a in alerts:
+        if a.get("bbox"):
+            x1, y1, x2, y2 = a["bbox"]
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
+            tag = "NOT WELCOME"
+            (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            ty = min(h - 2, y2 + th + 8)
+            cv2.rectangle(frame, (x1, ty - th - 6), (x1 + tw + 8, ty), (0, 0, 255), -1)
+            cv2.putText(frame, tag, (x1 + 4, ty - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+    names = ", ".join(a["name"] for a in alerts)
+    text = f"NOT WELCOME: {names}"
+    scale = max(0.6, w / 2600)
+    (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 2)
+    bar_h = th + 16
+    cv2.rectangle(frame, (0, h - bar_h), (w, h), (0, 0, 200), -1)
+    cv2.putText(frame, text, (12, h - 9), cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 2, cv2.LINE_AA)
+
+
 # Shared activity event writer, created in lifespan(). None until then (and
 # when ACTIVITY_PERSIST_EVENTS=false), which every call site tolerates.
 _activity_repo = None
@@ -156,6 +291,11 @@ class CameraWebSession:
     view_mode: str = "face"
     # Body-movement sub-view: all | phone | body | monitor | computer
     activity_filter: str = "all"
+    # What this camera was started with (Admin -> Cameras). A change
+    # restarts the session; see _watch_camera_features.
+    features: CameraFeatures = field(default_factory=lambda: CameraFeatures(face=True, activity=False))
+    # Live-view focus (_coordinate_focus): (paused, focus filter) as applied.
+    _focus_applied: tuple = field(default=(False, None), repr=False)
 
     # How many one-minute buckets of head-count history to keep in memory
     # per camera (120 = 2 hours). In-memory only, by design -- resets on
@@ -237,6 +377,10 @@ class CameraWebSession:
     # sitting AND on the phone at the same moment, they aren't mutually
     # exclusive states.
     _activity_tracks: dict = field(default_factory=dict, repr=False)
+    # Registered users seen on a camera they are blocked on (Register page
+    # "Allowed cameras"): user_id -> {"name", "employee_id", "score",
+    # "bbox", "first_seen", "last_seen", "last_seen_wall"}.
+    _access_alerts: dict = field(default_factory=dict, repr=False)
     # OCR mode: track_id -> {"text", "confidence", "votes", "confirmed",
     # "moving", "bbox", "first_seen_str", "last_seen_str", "last_updated"}.
     _ocr_tracks: dict = field(default_factory=dict, repr=False)
@@ -285,6 +429,15 @@ class CameraWebSession:
             # Lets the UI hide the body-movement controls on a camera that
             # isn't running activity analysis at all.
             "activity_available": self._activity is not None,
+            "face_enabled": self.features.face,
+            "activity_enabled": self.features.activity,
+            # Live-view focus: this camera has the GPU (focus) or has handed
+            # it to another camera being watched (paused).
+            "activity_paused": self._focus_applied[0],
+            "activity_focus": self._focus_applied[1],
+            # Confirmed phone use right now = violation (live alert banner).
+            "phone_violations": self._activity.phone_violations() if self._activity is not None else [],
+            "access_alerts": self.access_alerts(),
         }
         if result is None:
             return {
@@ -352,6 +505,7 @@ class CameraWebSession:
                     activity_filter=current_filter,
                     draw_primary=not show_activity,
                 )
+                _draw_access_alerts(frame, self.access_alerts(include_bbox=True))
                 # Display-only quality -- separate from and does not affect
                 # the /Recognize crop quality (recognize_client.py, stays 90).
                 ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
@@ -387,6 +541,10 @@ class CameraWebSession:
                     # must never stop capture, recognition or attendance.
                     logger.exception("[%s] Activity analysis failed for this pass", self.camera.name)
 
+            if result.ran_detection and result.tracked_faces:
+                self._check_access(result.tracked_faces)
+                _attendance.offer(self.camera.name, result.tracked_faces, result.frame)
+
             if result.ran_detection:
                 if current_source == "attendance":
                     face_count = len(result.tracked_faces)
@@ -402,6 +560,46 @@ class CameraWebSession:
                 else:
                     person_count = len(result.tracked_heads)
                     self._record_head_count(face_count=None, person_count=person_count, best_count=person_count)
+
+    def _check_access(self, tracked: list[TrackedFace]) -> None:
+        """Raise/refresh a "not welcome" alert for every registered user
+        recognized on this camera who is blocked here."""
+        now = time.monotonic()
+        for t in tracked:
+            uid = getattr(t, "registered_user_id", None)
+            if uid is None or not _access_policy.is_blocked(uid, self.id):
+                continue
+            with self._lock:
+                alert = self._access_alerts.get(uid)
+                if alert is None or now - alert["last_seen"] > _ACCESS_ALERT_HOLD_S:
+                    logger.warning(
+                        "[%s] ACCESS ALERT: %s (%s) is not allowed on this camera (cos=%.2f)",
+                        self.camera.name, t.name, t.person_id, t.registered_score,
+                    )
+                    alert = {"first_seen": now, "first_seen_wall": datetime.now().isoformat(timespec="seconds")}
+                    self._access_alerts[uid] = alert
+                alert.update(
+                    user_id=uid, name=t.name, employee_id=t.person_id,
+                    score=round(float(t.registered_score), 3), bbox=t.face.bbox,
+                    last_seen=now, last_seen_wall=datetime.now().isoformat(timespec="seconds"),
+                )
+
+    def access_alerts(self, include_bbox: bool = False) -> list[dict]:
+        """Alerts still within the hold window, newest first."""
+        now = time.monotonic()
+        with self._lock:
+            for uid in [u for u, a in self._access_alerts.items() if now - a["last_seen"] > _ACCESS_ALERT_HOLD_S]:
+                del self._access_alerts[uid]
+            alerts = sorted(self._access_alerts.values(), key=lambda a: a["last_seen"], reverse=True)
+            # Box only while the face is actually in view (< 1s), banner for the full hold.
+            return [
+                {
+                    "user_id": a["user_id"], "name": a["name"], "employee_id": a["employee_id"],
+                    "score": a["score"], "since": a["first_seen_wall"], "last_seen": a["last_seen_wall"],
+                    **({"bbox": a["bbox"] if now - a["last_seen"] < 1.0 else None} if include_bbox else {}),
+                }
+                for a in alerts
+            ]
 
     def _record_head_count(
         self,
@@ -744,7 +942,10 @@ def _slugify(name: str, index: int) -> str:
     return slug or f"camera-{index}"
 
 
-def _start_camera_session(camera: CameraConfig, config: AppConfig, cam_id: str) -> Optional[CameraWebSession]:
+def _start_camera_session(
+    camera: CameraConfig, config: AppConfig, cam_id: str,
+    feature_table: Optional[dict[str, CameraFeatures]] = None,
+) -> Optional[CameraWebSession]:
     try:
         rtsp_url = camera.rtsp_url
     except ValueError as exc:
@@ -771,22 +972,29 @@ def _start_camera_session(camera: CameraConfig, config: AppConfig, cam_id: str) 
         )
         head_count_source = "face"
 
+    # Admin -> Cameras: which analyses this camera runs (camera_features.py).
+    features = features_for(cam_id, feature_table, load_activity_config().enabled_for(cam_id))
+    enabled_detectors = tuple(config.detection.enabled_detectors)
+    if not features.face:
+        enabled_detectors = tuple(d for d in enabled_detectors if d not in ("face", "attendance"))
+        if head_count_source in ("face", "attendance"):
+            head_count_source = "activity" if features.activity else "attendance"
+
     # Activity analysis for this camera? Only for cameras listed in
     # ACTIVITY_CAMERAS, and only if the activity worker is actually enabled
     # -- YOLOv8x + YOLOv8x-pose is the most expensive pass in the system
     # (~236ms/frame measured at imgsz=960 on an RTX 3060), so it is opt-in
     # per camera rather than on everywhere.
     activity_cfg = load_activity_config()
-    activity_enabled = (
-        activity_cfg.enabled_for(cam_id)
-        and "activity" in config.detection.enabled_detectors
-    )
-    if activity_cfg.enabled_for(cam_id) and not activity_enabled:
+    enabled_activities = load_enabled_activities(activity_cfg.activity_types)
+    activity_enabled = features.activity and "activity" in enabled_detectors
+    if features.activity and not activity_enabled:
         logger.warning(
-            "[%s] ACTIVITY_CAMERAS lists this camera but 'activity' is not in "
+            "[%s] Body movement is switched on for this camera but 'activity' is not in "
             "ENABLED_DETECTORS=%s -- activity analysis is off for it.",
             camera.name, config.detection.enabled_detectors,
         )
+    logger.info("[%s] Features: face=%s, body movement=%s", camera.name, features.face, activity_enabled)
 
     pipeline = FacePipeline(
         stream=stream,
@@ -804,8 +1012,8 @@ def _start_camera_session(camera: CameraConfig, config: AppConfig, cam_id: str) 
         head_count_source=head_count_source,
         person_conf_threshold=config.detection.person_conf_threshold,
         ocr_kwargs=asdict(config.ocr),
-        enabled_detectors=config.detection.enabled_detectors,
-        activity_kwargs=activity_cfg.detector_kwargs(cam_id) if activity_enabled else None,
+        enabled_detectors=enabled_detectors,
+        activity_kwargs=activity_cfg.detector_kwargs(cam_id, enabled_activities) if activity_enabled else None,
         activity_always_on=activity_enabled,
         activity_fps=activity_cfg.fps,
     )
@@ -813,7 +1021,8 @@ def _start_camera_session(camera: CameraConfig, config: AppConfig, cam_id: str) 
     analyzer = None
     if activity_enabled:
         analyzer = CameraActivityAnalyzer(
-            camera_id=cam_id, config=activity_cfg, repository=_activity_repo
+            camera_id=cam_id, config=activity_cfg, repository=_activity_repo,
+            enabled_activities=enabled_activities,
         )
         logger.info(
             "[%s] Activity analysis enabled (device=%s imgsz=%d fps=%.1f, models=%s + %s)",
@@ -829,7 +1038,113 @@ def _start_camera_session(camera: CameraConfig, config: AppConfig, cam_id: str) 
         head_count_source=head_count_source,
         _activity=analyzer,
         _activity_skeleton=activity_cfg.debug_overlay,
+        features=features,
+        view_mode="face" if features.face or analyzer is None else "activity",
     ).start()
+
+
+# How often the camera server re-reads Admin -> Cameras switches.
+_FEATURES_POLL_S = 5.0
+
+# Live views that focus the GPU on one activity (see _coordinate_focus),
+# and the only activities a focused camera analyses and records.
+_FOCUS_ACTIVITIES = {
+    "phone": ("PHONE_INTERACTION",),
+    "monitor": ("MONITOR_INTERACTION",),
+    "computer": ("COMPUTER_INTERACTION",),
+    "body": ("SITTING", "STANDING", "WALKING"),   # posture only
+}
+_FOCUS_FILTERS = tuple(_FOCUS_ACTIVITIES)
+# The click itself applies the focus at once (set_view_mode); this loop only
+# catches a page being opened or closed.
+_FOCUS_POLL_S = 0.25
+
+
+def _recorded_activities(focus: Optional[str], admin_enabled) -> list[str]:
+    """What a camera records: the admin's selection, or -- while focused --
+    only the focused activity (if the admin has it switched on at all)."""
+    admin = list(admin_enabled)
+    if focus is None:
+        return admin
+    return [a for a in admin if a in _FOCUS_ACTIVITIES[focus]]
+
+
+def _coordinate_focus(stop: threading.Event) -> None:
+    """While someone watches a camera in a Phone / Body / Monitor / Computer
+    view, pause body-movement analysis on every OTHER camera and give the
+    watched one the GPU (faster checks; phones at higher resolution).
+
+    "Watching" = an MJPEG viewer is attached to that camera's stream, so
+    closing the page (or going back to All / Debug) resumes everything
+    within a second or two. Face recognition and attendance are never
+    paused. A paused camera records no activity while paused: its open
+    sessions close at their last real sighting, never with invented time.
+    """
+    cfg = load_activity_config()
+    while not stop.wait(_FOCUS_POLL_S):
+        _apply_focus(dict(_sessions), cfg.focus_fps, load_enabled_activities(cfg.activity_types))
+
+
+_focus_lock = threading.Lock()
+
+
+def _apply_focus(sessions: dict, focus_fps: float, admin_enabled=()) -> None:
+    """One coordination pass over {camera_id: session} (see _coordinate_focus).
+    Called from the click handler and the background loop -- serialised."""
+    with _focus_lock:
+        _apply_focus_locked(sessions, focus_fps, admin_enabled)
+
+
+def _apply_focus_locked(sessions: dict, focus_fps: float, admin_enabled=()) -> None:
+    sessions = {cid: s for cid, s in sessions.items() if s._activity is not None}
+    focused = {}
+    for cid, s in sessions.items():
+        with s._lock:
+            if s._viewer_count > 0 and s.view_mode == "activity" and s.activity_filter in _FOCUS_FILTERS:
+                focused[cid] = s.activity_filter
+    for cid, s in sessions.items():
+        wanted = (False, focused[cid]) if cid in focused else (bool(focused), None)
+        if wanted == s._focus_applied:
+            continue
+        s.pipeline.set_activity_focus(wanted[0], wanted[1], focus_fps)
+        if wanted[1] != s._focus_applied[1]:
+            # Record only the focused activity; open sessions of the others
+            # close at their last sighting and are stored. Restored on leave.
+            s._activity.set_enabled_activities(_recorded_activities(wanted[1], admin_enabled))
+        s._focus_applied = wanted
+        logger.info(
+            "[%s] Body movement %s", s.camera.name,
+            f"focused on {wanted[1]}" if wanted[1] else ("paused (another camera is focused)" if wanted[0] else "back to normal"),
+        )
+
+
+def _watch_camera_features(stop: threading.Event) -> None:
+    """Restart a camera whose face / body-movement switches changed. Only
+    that camera blinks (a few seconds while its models load); the others
+    keep running. Open activity sessions are stored before the restart."""
+    while not stop.wait(_FEATURES_POLL_S):
+        table = load_camera_features()
+        if table is None:
+            continue
+        default_activity = load_activity_config().enabled_for
+        for cam_id, session in list(_sessions.items()):
+            wanted = features_for(cam_id, table, default_activity(cam_id))
+            if wanted == session.features:
+                continue
+            logger.info(
+                "[%s] Features changed: face %s -> %s, body movement %s -> %s -- restarting this camera",
+                session.camera.name, session.features.face, wanted.face, session.features.activity, wanted.activity,
+            )
+            try:
+                session.stop()
+                new = _start_camera_session(session.camera, load_config(), cam_id, table)
+            except Exception:
+                logger.exception("[%s] Restart after a feature change failed", session.camera.name)
+                continue
+            if new is None:
+                _sessions.pop(cam_id, None)
+            else:
+                _sessions[cam_id] = new
 
 
 @asynccontextmanager
@@ -845,9 +1160,10 @@ async def lifespan(app: FastAPI):
             "No cameras configured. Set CAMERA_IP/CAMERA_RTSP_URL (single "
             "camera) or CAMERA_1_IP, CAMERA_2_IP, ... (multiple) in .env."
         )
+    feature_table = load_camera_features()
     for i, camera in enumerate(config.cameras, start=1):
         cam_id = _slugify(camera.name, i)
-        session = _start_camera_session(camera, config, cam_id)
+        session = _start_camera_session(camera, config, cam_id, feature_table)
         if session is not None:
             _sessions[cam_id] = session
             logger.info("Started camera session '%s' (%s)", cam_id, camera.name)
@@ -862,12 +1178,22 @@ async def lifespan(app: FastAPI):
             rtsp_path=entry.get("rtsp_path", "/Streaming/Channels/102"),
             transport=entry.get("transport", "tcp"),
         )
-        session = _start_camera_session(camera, config, entry["id"])
+        session = _start_camera_session(camera, config, entry["id"], feature_table)
         if session is not None:
             _sessions[entry["id"]] = session
             logger.info("Started custom camera session '%s' (%s)", entry["id"], camera.name)
 
+    features_stop = threading.Event()
+    threading.Thread(
+        target=_watch_camera_features, args=(features_stop,), daemon=True, name="camera-features",
+    ).start()
+    threading.Thread(
+        target=_coordinate_focus, args=(features_stop,), daemon=True, name="activity-focus",
+    ).start()
+
     yield
+
+    features_stop.set()
 
     for session in _sessions.values():
         session.stop()
@@ -895,14 +1221,18 @@ class LoginRequest(BaseModel):
 
 @app.post("/api/login")
 def login(body: LoginRequest) -> dict:
+    if jwt_enabled():
+        # Real logins live in MySQL and are checked by the .NET backend.
+        raise HTTPException(status_code=410, detail="Log in through the .NET backend: POST /api/db/auth/login")
     if not check_credentials(body.username, body.password):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     return {"token": DEMO_TOKEN}
 
 
 @app.get("/api/cameras")
-def list_cameras(_: None = Depends(require_token)) -> list[dict]:
-    return [session.latest_status() for session in _sessions.values()]
+def list_cameras(principal: Principal = Depends(require_token)) -> list[dict]:
+    # Only the cameras assigned to this login (all for Super Admin / all_cameras).
+    return [session.latest_status() for cam_id, session in _sessions.items() if principal.can_see(cam_id)]
 
 
 class AddCameraRequest(BaseModel):
@@ -925,7 +1255,7 @@ class TestCameraRequest(BaseModel):
 
 
 @app.post("/api/cameras/test-connection")
-def test_camera_connection(body: TestCameraRequest, _: None = Depends(require_token)) -> dict:
+def test_camera_connection(body: TestCameraRequest, _: Principal = Depends(require_roles(SUPER_ADMIN))) -> dict:
     """Test connecting to an RTSP camera stream (e.g. Tapo) without adding it."""
     if not body.ip.strip():
         raise HTTPException(status_code=422, detail="ip is required")
@@ -967,7 +1297,7 @@ def test_camera_connection(body: TestCameraRequest, _: None = Depends(require_to
 
 
 @app.post("/api/cameras")
-def add_camera(body: AddCameraRequest, _: None = Depends(require_token)) -> dict:
+def add_camera(body: AddCameraRequest, _: Principal = Depends(require_roles(SUPER_ADMIN))) -> dict:
     """Add a camera at runtime -- no .env edit or restart required. Persisted
     to data/cameras.json so it comes back on the next server restart too."""
     if not body.ip.strip():
@@ -1008,7 +1338,7 @@ def add_camera(body: AddCameraRequest, _: None = Depends(require_token)) -> dict
 
 
 @app.delete("/api/cameras/{camera_id}")
-def remove_camera(camera_id: str, _: None = Depends(require_token)) -> dict:
+def remove_camera(camera_id: str, _: Principal = Depends(require_roles(SUPER_ADMIN))) -> dict:
     session = _sessions.pop(camera_id, None)
     if session is None:
         raise HTTPException(status_code=404, detail="Camera not found")
@@ -1022,7 +1352,7 @@ def remove_camera(camera_id: str, _: None = Depends(require_token)) -> dict:
 
 
 @app.get("/api/cameras/{camera_id}/status")
-def camera_status(camera_id: str, _: None = Depends(require_token)) -> dict:
+def camera_status(camera_id: str, _: Principal = Depends(require_camera)) -> dict:
     session = _sessions.get(camera_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Camera not found")
@@ -1030,7 +1360,7 @@ def camera_status(camera_id: str, _: None = Depends(require_token)) -> dict:
 
 
 @app.get("/api/cameras/{camera_id}/head-counts")
-def camera_head_counts(camera_id: str, _: None = Depends(require_token)) -> list[dict]:
+def camera_head_counts(camera_id: str, _: Principal = Depends(require_camera)) -> list[dict]:
     session = _sessions.get(camera_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Camera not found")
@@ -1038,7 +1368,7 @@ def camera_head_counts(camera_id: str, _: None = Depends(require_token)) -> list
 
 
 @app.get("/api/cameras/{camera_id}/recognitions")
-def camera_recognitions(camera_id: str, _: None = Depends(require_token)) -> list[dict]:
+def camera_recognitions(camera_id: str, _: Principal = Depends(require_camera)) -> list[dict]:
     """Results of every /Recognize call made for this camera (one per newly
     appeared face track), most recent last."""
     session = _sessions.get(camera_id)
@@ -1048,10 +1378,10 @@ def camera_recognitions(camera_id: str, _: None = Depends(require_token)) -> lis
 
 
 @app.get("/api/cameras/{camera_id}/activity")
-def camera_activity(camera_id: str, _: None = Depends(require_token)) -> list[dict]:
-    """Per-person sitting/phone/computer duration totals (Activity mode).
-    Anonymous track ids -- reset whenever this camera switches away from
-    Activity mode and back."""
+def camera_activity(camera_id: str, _: Principal = Depends(require_camera)) -> list[dict]:
+    """Live per-USER activity rows: current state, open sessions and totals
+    (accumulated over every session, never reset by a new tracker id).
+    People not identified yet appear as anonymous track subjects."""
     session = _sessions.get(camera_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Camera not found")
@@ -1060,7 +1390,7 @@ def camera_activity(camera_id: str, _: None = Depends(require_token)) -> list[di
 
 @app.get("/api/cameras/{camera_id}/activity/events")
 def camera_activity_events(
-    camera_id: str, limit: int = 100, _: None = Depends(require_token)
+    camera_id: str, limit: int = 100, _: Principal = Depends(require_camera)
 ) -> list[dict]:
     """Live in-memory activity event timeline for this camera, oldest first.
 
@@ -1076,6 +1406,17 @@ def camera_activity_events(
     return session._activity.recent_events(limit=limit)
 
 
+def _check_history_scope(principal: Principal, camera_id: Optional[str]) -> None:
+    """A login limited to some cameras must ask for one of them; only
+    all-camera logins may query every camera at once."""
+    if principal.cameras is None:
+        return
+    if camera_id is None:
+        raise HTTPException(status_code=403, detail="camera_id is required for your login")
+    if not principal.can_see(camera_id):
+        raise HTTPException(status_code=403, detail=f"You do not have access to camera '{camera_id}'")
+
+
 @app.get("/api/activity/events")
 def activity_events(
     camera_id: Optional[str] = None,
@@ -1083,7 +1424,7 @@ def activity_events(
     activity_type: Optional[str] = None,
     date: Optional[str] = None,
     limit: int = 500,
-    _: None = Depends(require_token),
+    principal: Principal = Depends(require_token),
 ) -> list[dict]:
     """Stored activity events, newest first. `date` is YYYY-MM-DD (UTC).
 
@@ -1091,6 +1432,7 @@ def activity_events(
     PHONE_INTERACTION, MONITOR_INTERACTION and COMPUTER_INTERACTION are
     independent streams, each with its own start/end/duration.
     """
+    _check_history_scope(principal, camera_id)
     try:
         return ActivityRepository.query_events(
             camera_id=camera_id, person_id=person_id,
@@ -1105,9 +1447,10 @@ def activity_events(
 def activity_summary(
     camera_id: Optional[str] = None,
     date: Optional[str] = None,
-    _: None = Depends(require_token),
+    principal: Principal = Depends(require_token),
 ) -> list[dict]:
     """Per-person totals per activity type over the stored events."""
+    _check_history_scope(principal, camera_id)
     try:
         return ActivityRepository.summary(camera_id=camera_id, date=date)
     except Exception as exc:
@@ -1115,8 +1458,56 @@ def activity_summary(
         raise HTTPException(status_code=503, detail="Activity history unavailable")
 
 
+# Activities whose analysis lives in the detector process (YOLO classes);
+# changing any of these needs that worker restarted. Posture/low-movement
+# are computed from person boxes + pose that always run.
+_DETECTOR_ACTIVITIES = {"PHONE_INTERACTION", "MONITOR_INTERACTION", "COMPUTER_INTERACTION"}
+
+
+class ActivitySettingsRequest(BaseModel):
+    enabled_activities: list[str]
+
+
+@app.get("/api/activity/settings")
+def get_activity_settings(_: None = Depends(require_token)) -> dict:
+    """The admin-selected activity list, plus every selectable activity."""
+    cfg = load_activity_config()
+    from app.activity.state_manager import ALL_ACTIVITIES
+    return {
+        "enabled_activities": list(load_enabled_activities(cfg.activity_types)),
+        "available_activities": list(ALL_ACTIVITIES),
+    }
+
+
+@app.put("/api/activity/settings")
+def put_activity_settings(req: ActivitySettingsRequest, _: Principal = Depends(require_roles(SUPER_ADMIN))) -> dict:
+    """Choose which activities are analysed and stored. Applies to the
+    session layer immediately (deselected activities close and store their
+    open sessions); if the detector-side set changed, each camera's activity
+    worker is restarted with the new selection (~5-10s of no activity data
+    while YOLO reloads -- sessions survive it via their grace logic only if
+    it is short, so prefer changing this outside busy hours)."""
+    unknown = [a for a in req.enabled_activities if not normalize_activity_types([a])]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown activity type(s): {unknown}")
+    requested = normalize_activity_types(req.enabled_activities)
+    cfg = load_activity_config()
+    previous = set(load_enabled_activities(cfg.activity_types))
+    enabled = save_enabled_activities(requested)
+    restart = (previous & _DETECTOR_ACTIVITIES) != (set(enabled) & _DETECTOR_ACTIVITIES)
+    restarted = []
+    for cam_id, session in _sessions.items():
+        if session._activity is None:
+            continue
+        session._activity.set_enabled_activities(_recorded_activities(session._focus_applied[1], enabled))
+        if restart and session.pipeline.restart_activity_worker(cfg.detector_kwargs(cam_id, enabled)):
+            restarted.append(cam_id)
+    logger.info("Activity selection changed: %s (detector restarted on: %s)", list(enabled), restarted or "none")
+    return {"enabled_activities": list(enabled), "restarted_cameras": restarted}
+
+
 @app.get("/api/cameras/{camera_id}/ocr")
-def camera_ocr(camera_id: str, _: None = Depends(require_token)) -> list[dict]:
+def camera_ocr(camera_id: str, _: Principal = Depends(require_camera)) -> list[dict]:
     """Latest voted OCR reading per tracked text region (OCR mode): static
     text (walls/signs/boards) and moving text (carried by tracked people/
     objects), each with confidence + how many multi-frame votes agree."""
@@ -1134,7 +1525,7 @@ class HeadCountSourceRequest(BaseModel):
 def set_head_count_source(
     camera_id: str,
     body: HeadCountSourceRequest,
-    _: None = Depends(require_token),
+    _: Principal = Depends(require_camera),
 ) -> dict:
     """Change the detection mode for a camera at runtime."""
     session = _sessions.get(camera_id)
@@ -1162,7 +1553,7 @@ class ShowHudRequest(BaseModel):
 def set_show_hud(
     camera_id: str,
     body: ShowHudRequest,
-    _: None = Depends(require_token),
+    _: Principal = Depends(require_camera),
 ) -> dict:
     """Toggle showing the HUD on the video stream."""
     session = _sessions.get(camera_id)
@@ -1185,7 +1576,7 @@ class ViewModeRequest(BaseModel):
 def set_view_mode(
     camera_id: str,
     body: ViewModeRequest,
-    _: None = Depends(require_token),
+    _: Principal = Depends(require_camera),
 ) -> dict:
     """Choose what the live overlay shows: faces, or body movement.
 
@@ -1204,10 +1595,7 @@ def set_view_mode(
         if view_mode == "activity" and session._activity is None:
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    "Activity analysis is not enabled for this camera. "
-                    "Add its id to ACTIVITY_CAMERAS in .env and restart."
-                ),
+                detail="Body movement is switched off for this camera (Admin -> Cameras).",
             )
         with session._lock:
             session.view_mode = view_mode
@@ -1226,6 +1614,10 @@ def set_view_mode(
         current = {"view_mode": session.view_mode, "activity_filter": session.activity_filter}
     logger.info("[%s] view changed to %r/%r", session.camera.name,
                 current["view_mode"], current["activity_filter"])
+    # Apply the focus now rather than on the coordinator's next tick, so the
+    # selected analysis starts the moment the button is clicked.
+    cfg = load_activity_config()
+    _apply_focus(dict(_sessions), cfg.focus_fps, load_enabled_activities(cfg.activity_types))
     return {"camera_id": camera_id, **current}
 
 
@@ -1268,7 +1660,7 @@ def _mjpeg_generator(session: CameraWebSession):
 
 
 @app.get("/api/cameras/{camera_id}/stream")
-def camera_stream(camera_id: str, _: None = Depends(require_token)) -> StreamingResponse:
+def camera_stream(camera_id: str, _: Principal = Depends(require_camera)) -> StreamingResponse:
     session = _sessions.get(camera_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Camera not found")

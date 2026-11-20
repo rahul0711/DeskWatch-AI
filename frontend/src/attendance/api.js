@@ -1,18 +1,19 @@
-// Talks to app/web/attendance_server.py (the new SCRFD/AdaFace/FAISS
-// backend). Reuses the same bearer token as ../api.js (single shared login).
+// Registering people and their face photos goes to app/web/attendance_server.py
+// (it needs the face model). Reading people / attendance and camera blocking go
+// to the .NET backend (../db/api.js). Same bearer token as ../api.js.
 
 import { AuthError, getToken } from '../api'
+import { fetchDbAttendance, fetchPersons, setPersonCameraAccess } from '../db/api'
 
 function authHeaders() {
   const token = getToken()
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-export async function fetchUsers() {
-  const res = await fetch('/api/users', { headers: authHeaders() })
-  if (res.status === 401) throw new AuthError()
-  if (!res.ok) throw new Error(`GET /api/users -> ${res.status}`)
-  return res.json()
+// Same shape as the Python GET /api/users; blocked_cameras only lists cameras
+// the logged-in login has.
+export function fetchUsers() {
+  return fetchPersons()
 }
 
 // images: array of { file: Blob, filename: string }
@@ -72,8 +73,9 @@ export async function deleteUser(userId) {
     headers: authHeaders(),
   })
   if (res.status === 401) throw new AuthError()
-  if (!res.ok) throw new Error(`DELETE /api/users/${userId} -> ${res.status}`)
-  return res.json()
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body.detail || `DELETE /api/users/${userId} -> ${res.status}`)
+  return body
 }
 
 export async function deleteFace(faceId) {
@@ -82,14 +84,19 @@ export async function deleteFace(faceId) {
     headers: authHeaders(),
   })
   if (res.status === 401) throw new AuthError()
-  if (!res.ok) throw new Error(`DELETE /api/faces/${faceId} -> ${res.status}`)
-  return res.json()
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body.detail || `DELETE /api/faces/${faceId} -> ${res.status}`)
+  return body
 }
 
-export async function fetchAttendance(date) {
-  const qs = date ? `?date=${encodeURIComponent(date)}` : ''
-  const res = await fetch(`/api/attendance${qs}`, { headers: authHeaders() })
-  if (res.status === 401) throw new AuthError()
-  if (!res.ok) throw new Error(`GET /api/attendance -> ${res.status}`)
-  return res.json()
+// `date` is a UTC day (YYYY-MM-DD), as before.
+export function fetchAttendance(date) {
+  return fetchDbAttendance(date)
+}
+
+// Cameras this person is NOT allowed on. Being recognized on one of them
+// raises a "not welcome" alert on that camera's live view. Only cameras the
+// logged-in login has are changed; blocks on its other cameras are kept.
+export function setCameraAccess(userId, blockedCameras) {
+  return setPersonCameraAccess(userId, blockedCameras)
 }

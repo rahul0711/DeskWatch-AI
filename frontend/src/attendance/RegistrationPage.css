@@ -283,3 +283,57 @@
   font-size: 0.95rem;
   font-weight: 600;
 }
+
+/* ---- Per-person camera access ---- */
+.registration__user-card--restricted {
+  border-color: #7a3a3a;
+}
+
+.registration__restricted-badge {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: rgba(255, 80, 80, 0.15);
+  color: #ff9090;
+  font-size: 0.75rem;
+}
+
+.registration__access {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #2c303a;
+  font-size: 0.85rem;
+}
+
+.registration__access-label {
+  color: #8a92a6;
+}
+
+.registration__access-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.registration__access-choice--blocked {
+  color: #ff9090;
+  text-decoration: line-through;
+}
+
+.registration__access--form {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  border: 1px solid #2c303a;
+  border-radius: 6px;
+}
+
+.registration__access--form .registration__hint {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  font-size: 0.75rem;
+}

@@ -43,6 +43,9 @@ class User(Base):
     attendance_events: Mapped[list["AttendanceEvent"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    camera_restrictions: Mapped[list["CameraRestriction"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class FaceEmbedding(Base):
@@ -137,6 +140,60 @@ class ActivityEventRow(Base):
     __table_args__ = (
         Index("ix_activity_person_camera_start", "person_id", "camera_id", "start_time"),
         Index("ix_activity_type_start", "activity_type", "start_time"),
+    )
+
+
+class CameraRestriction(Base):
+    """A camera this user is NOT allowed on. Stored as restrictions rather
+    than permissions on purpose: a newly registered person, and a newly
+    added camera, default to "allowed" -- only an explicit admin choice in
+    the Register page blocks someone. Seeing a blocked user on that camera
+    raises an on-screen "not welcome" alert (app/web/server.py)."""
+
+    __tablename__ = "camera_restrictions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    # Camera id as app/web/server.py slugs it ("camera-01", "corridor", ...).
+    camera_id: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[dt.datetime] = mapped_column(default=lambda: dt.datetime.now(dt.timezone.utc))
+
+    user: Mapped["User"] = relationship(back_populates="camera_restrictions")
+
+    __table_args__ = (Index("ux_camera_restrictions_user_camera", "user_id", "camera_id", unique=True),)
+
+
+class ActivitySessionRow(Base):
+    """One activity session of one USER (app/activity/sessions.py).
+
+    Keyed by user_id, never by tracker id: a person who gets a new track id
+    after an occlusion is still the same user, and their sessions land on
+    the same user_id. Two separate phone sessions (25s, then 20s) are two
+    rows; the user's total is the SUM over rows, never reset by a new one.
+    user_id is the external employee id from /Recognize (or the local
+    known-faces name); NULL only for a person never identified. Like
+    activity_events, intentionally not foreign-keyed to `users`.
+    """
+
+    __tablename__ = "activity_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    user_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    camera_id: Mapped[str] = mapped_column(String(64), index=True)
+    activity_type: Mapped[str] = mapped_column(String(64), index=True)
+    start_time: Mapped[dt.datetime] = mapped_column(index=True)
+    end_time: Mapped[dt.datetime] = mapped_column()
+    duration: Mapped[float] = mapped_column(Float)
+    # Fraction of passes during the session whose evidence agreed with it.
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    # Tracker ids that contributed (comma-separated), for debugging only.
+    track_ids: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(default=lambda: dt.datetime.now(dt.timezone.utc))
+
+    __table_args__ = (
+        Index("ix_activity_sessions_user_camera_start", "user_id", "camera_id", "start_time"),
+        Index("ix_activity_sessions_type_start", "activity_type", "start_time"),
     )
 
 

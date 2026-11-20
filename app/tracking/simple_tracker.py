@@ -34,6 +34,17 @@ class TrackedFace:
     frames_since_seen: int = 0
     name: str = "Unknown"
     name_confidence: float = 0.0
+    # Cached InsightFace (ArcFace) embedding of this face track, L2-normalised
+    # float32[512], or None. Computed on a schedule in the face worker
+    # (process_detector._EmbeddingScheduler), NOT every frame; consumed by
+    # app/activity/identity_cache.py to reconnect a new track to its user.
+    embedding: object | None = None
+    # Registered user (Register page) this face matched, via AdaFace + FAISS
+    # in the face worker (app/attendance/registered_matcher.py). None when
+    # not matched (yet). person_id is the employee id.
+    registered_user_id: int | None = None
+    person_id: str | None = None
+    registered_score: float = 0.0
     # Activity mode only (app/detection/activity_detector.py) -- attached
     # post-hoc same as name/name_confidence above, not tracking-continuity
     # state, so they live here rather than on the generic DetectedFace shape
@@ -50,6 +61,10 @@ class TrackedFace:
     phone_hand_distance: float = -1.0    # pixels from phone centre to nearest wrist
     phone_bbox: tuple | None = None      # the phone detection box, if any
     phone_confidence: float = 0.0        # YOLO confidence of that phone
+    # Phone-use confidence 0..1, built up over passes (ActivityDetector's
+    # _PhoneUseConfidence): detector certainty, phone-in-hand strength and
+    # consistency over time. What the live Phone view and alerts show.
+    phone_use_confidence: float = 0.0
     # 17 COCO pose keypoints as (17, 2) xy and (17,) confidence, or None
     # when no pose matched this person box. Carried out of the detector
     # process so the movement analyzer in the parent can measure per-joint
