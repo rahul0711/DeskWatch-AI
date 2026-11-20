@@ -216,11 +216,24 @@ class CameraActivityAnalyzer:
                 setattr(t, f"{stream}_session_seconds", sess.current_duration(now) if sess is not None else 0.0)
                 setattr(t, f"{stream}_total_seconds", self._states.total_seconds(state, key, now))
             t.movement_score = state.movement_score
-            t.activity = state.display_activity
             t.primary_activity = (
                 str(state.primary.value) if state.primary is not None else "UNKNOWN"
             )
-            t.activity_seconds = state.display_since(now)
+            # The main label follows the same on-screen rule as above: phone,
+            # monitor or computer only while actually seen in the last few
+            # seconds -- not through the recording grace, which kept "PHONE"
+            # on someone who had already put the phone down -- else posture.
+            for flag, stream, act in ((t.phone_in_use, "phone", "PHONE_INTERACTION"),
+                                      (t.monitor_facing, "monitor", "MONITOR_INTERACTION"),
+                                      (t.computer_in_use, "computer", "COMPUTER_INTERACTION")):
+                if flag:
+                    sess = state.session(stream)
+                    t.activity = act
+                    t.activity_seconds = sess.current_duration(now) if sess is not None else 0.0
+                    break
+            else:
+                t.activity = t.primary_activity
+                t.activity_seconds = (now - state.primary.since) if state.primary is not None else 0.0
             t.stationary_seconds = state.stationary_seconds(now)
             if state.person_name:
                 t.name = state.person_name

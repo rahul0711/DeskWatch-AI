@@ -126,6 +126,9 @@ _PHONE_HOLD_MAX_DIST = 0.10   # wrist -> last phone centre, in body heights
 # A phone counts as IN HAND only with a wrist within this distance of its
 # edge, in body heights (_phone_person_score).
 _PHONE_IN_HAND_DIST = 0.10
+# A phone a hand is only NEAR (not on) counts when its centre is at most this
+# far below the shoulders, in body heights (chest/face level, held out).
+_PHONE_RAISED_BELOW_SHOULDER = 0.12
 # Desk phones (_DeskPhones), judged by the phone's OWN motion. Measured on
 # Camera 01: a phone lying beside a typing hand kept its box within 1px for
 # 10s+; a phone in a hand never holds that still.
@@ -155,6 +158,10 @@ _HAND_ZOOM_PER_PASS = 3
 # hands at the chin 69% and 97%. Zoom-only finds with more skin than this
 # are hands, not phones.
 _ZOOM_MAX_SKIN = 0.45
+# For RF-DETR finds, a looser limit: a phone wrapped in both hands is partly
+# skin. Measured: phones 0.00, 0.00, 0.55 (held in both hands); fists at the
+# chin / mouth 0.69, 0.97.
+_RFDETR_MAX_SKIN = 0.62
 # Phone hints this faint in the full frame are not phones, but they mark a
 # hand worth zooming into first.
 _PHONE_HINT_CONF = 0.03
@@ -191,7 +198,7 @@ _IMG_SIZE = 960
 # This is cheap local hysteresis -- the real temporal confirmation (and all
 # duration accounting) happens in app/activity/state_manager.py.
 _SMOOTH_WINDOW = 5
-_PHONE_MIN_VOTES = 2
+_PHONE_MIN_VOTES = 3    # phone seen in 3 of the last 5 passes (temporal confirmation)
 _COMPUTER_MIN_VOTES = 3
 _MONITOR_MIN_VOTES = 2
 
@@ -262,6 +269,34 @@ def _posture_from_bbox(
     return "sitting"
 
 
+# Weight of "this person is inside a drawn seat zone" in the posture vote:
+# outweighs any single cue and the ambiguous frontal reading (0.5 + 1), but
+# straight legs seen from the side plus a tall box (1 + 1) still say
+# standing -- someone standing at their own desk. Same 24/24 on the site
+# posture set as a stronger 2.5, which no rule could ever overrule.
+_SEAT_ZONE_VOTE = 1.5
+
+
+def _seat_zone_for(bbox, pose, zones_px, kp_min_conf: float = _KP_MIN_CONF):
+    """The workstation zone this person sits in, or None. Anchor: the hips
+    when visible, else a point 60% down the person box (where hips are)."""
+    if not zones_px:
+        return None
+    x1, y1, x2, y2 = bbox
+    ax, ay = (x1 + x2) / 2, y1 + 0.6 * (y2 - y1)
+    if pose is not None:
+        kxy, kconf = pose
+        if len(kconf) > _KP_HIP_R and min(kconf[_KP_HIP_L], kconf[_KP_HIP_R]) >= kp_min_conf:
+            ax = float(kxy[_KP_HIP_L][0] + kxy[_KP_HIP_R][0]) / 2
+            ay = float(kxy[_KP_HIP_L][1] + kxy[_KP_HIP_R][1]) / 2
+    inside = [z for z in zones_px if z["seat"][0] <= ax <= z["seat"][2] and z["seat"][1] <= ay <= z["seat"][3]]
+    if not inside:
+        return None
+    # Neighbouring seats drawn with a little overlap: the seat whose centre
+    # is nearest the hips is this person's.
+    return min(inside, key=lambda z: np.hypot((z["seat"][0] + z["seat"][2]) / 2 - ax, (z["seat"][1] + z["seat"][3]) / 2 - ay))
+
+
 def _hips_on_chair(
     hips: tuple[float, float] | None,
     bbox: tuple[int, int, int, int],
@@ -293,6 +328,7 @@ def _classify_posture(
     kp_min_conf: float = _KP_MIN_CONF,
     chairs: list[tuple[int, int, int, int]] | None = None,
     learned: tuple[str, float] | None = None,
+    in_seat: bool = False,
 ) -> str:
     """Sitting/standing from several weak cues, voted.
 
@@ -333,7 +369,15 @@ def _classify_posture(
     if learned is not None and learned[0] in ("sitting", "standing"):
         learned_vote = (2.0 if learned[0] == "standing" else -2.0) * float(learned[1])
 
+    # A seat zone an admin drew around this workstation's chair (Admin ->
+    # Workstations): being in it is strong evidence of sitting -- it settles
+    # the views 2D geometry cannot (facing the camera, legs under the desk).
+    # Clear standing (legs visible from the side + tall box) still wins.
+    seat_vote = -_SEAT_ZONE_VOTE if in_seat else 0.0
+
     def rules_only_fallback() -> str:
+        if in_seat:
+            return "sitting" if learned_vote < _SEAT_ZONE_VOTE else "standing"
         if on_chair:
             base = -1.0
         else:
@@ -372,7 +416,7 @@ def _classify_posture(
 
     if on_chair:
         score -= 1.0
-    score += learned_vote
+    score += learned_vote + seat_vote
 
     return "standing" if score > 0 else "sitting"
 
@@ -751,8 +795,17 @@ def _phone_person_score(
 
         # Distance from the hand (wrist joint, or the palm centre beyond it
         # along the forearm -- _hand_points) to the phone's EDGE, 0 when
-        # over the phone, normalised by body height. "Near the hand" does
-        # not count -- only "in it": a phone beside the keyboard is further.
+        # over the phone, normalised by body height.
+        #   ON the phone (<= half of _PHONE_IN_HAND_DIST): in the hand --
+        #     texting, a call, a phone held in the lap.
+        #   NEAR it (up to _PHONE_IN_HAND_DIST): only if the phone is RAISED
+        #     to chest/face height (held out in front). Near a hand at desk
+        #     level it is lying on the table beside a typing hand. Measured:
+        #     phone on a table beside the keyboard 0.078 from the hand and
+        #     0.22 body heights below the shoulders; texting 0.000; a call
+        #     0.023 and above the shoulders.
+        sh = [kxy[i] for i in (_KP_SHOULDER_L, _KP_SHOULDER_R) if i < len(kconf) and kconf[i] >= _KP_MIN_CONF]
+        raised = bool(sh) and (phone_cy - float(np.mean([p_[1] for p_ in sh]))) / max(ph, 1) <= _PHONE_RAISED_BELOW_SHOULDER
         for pts in _hand_points(kxy, kconf, _KP_MIN_CONF):
             for wx, wy in pts:
                 dx = max(ox1 - wx, 0.0, wx - ox2)
@@ -761,7 +814,7 @@ def _phone_person_score(
 
                 if normalized_distance <= _PHONE_IN_HAND_DIST * 0.5:
                     score = 1.0
-                elif normalized_distance <= _PHONE_IN_HAND_DIST:
+                elif normalized_distance <= _PHONE_IN_HAND_DIST and raised:
                     score = 0.75
                 else:
                     score = 0.0
@@ -1201,7 +1254,11 @@ class ActivityDetector:
         focus_phone_imgsz: int = 1280,
         phone_zoom_always: bool = False,
         phone_zoom_conf: float = 0.20,
+        phone_detector: str = "rfdetr",
+        rfdetr_model: str = "",
+        rfdetr_conf: float = 0.25,
     ) -> None:
+        self._rfdetr = None   # RF-DETR phone detector, loaded below when configured
         import torch
         from ultralytics import YOLO
 
@@ -1276,6 +1333,7 @@ class ActivityDetector:
         self._phone_zoom_conf = phone_zoom_conf
         self._zoom_turn = 0
         self._stand_up_guard = _StandUpGuard()
+        self._zones: list[dict] = []         # workstations (Admin -> Workstations), 0..1 coords
         self._screens = _StaticObjects(fixed=self._monitor_regions)
         self._peripherals = _StaticObjects()
         self._gaze = _ScreenGaze()
@@ -1299,6 +1357,16 @@ class ActivityDetector:
                 self._phone_model_imgsz = phone_model_imgsz
             else:
                 logger.warning("ACTIVITY_PHONE_MODEL %s not found -- using the stock phone class", phone_model)
+        # RF-DETR on native-resolution upper-body crops (app/detection/rfdetr_phone.py):
+        # on this site's test frames 7/9 phones vs 1-2/9 for YOLO on the full frame.
+        if (phone_detector or "").lower() == "rfdetr" and self._phone_model is None:
+            if rfdetr_model and Path(rfdetr_model).exists():
+                from app.detection.rfdetr_phone import RFDETRPhoneDetector
+                provider = "CUDAExecutionProvider" if self._device == "cuda" else "CPUExecutionProvider"
+                self._rfdetr = RFDETRPhoneDetector(rfdetr_model, conf=rfdetr_conf, provider=provider)
+                self._apply_wants()          # the YOLO phone class is no longer needed
+            else:
+                logger.warning("RF-DETR model %s not found -- phones from YOLO", rfdetr_model or "(unset)")
         self._posture_model = None
         if posture_model:
             if Path(posture_model).exists():
@@ -1413,14 +1481,22 @@ class ActivityDetector:
             self._classes.append(_CLASS_TV)
         if self._want_computer:
             self._classes += [_CLASS_LAPTOP, _CLASS_MOUSE, _CLASS_KEYBOARD]
-        if self._want_phone or self._want_monitor:
+        if (self._want_phone or self._want_monitor) and self._rfdetr is None:
             # In the Monitor view phones are looked for only as a veto: a
             # phone in someone's hand means they are looking at the phone,
             # not the screen behind it (from above, both can lie in the same
             # direction from the head). Never recorded or drawn there.
             self._classes.append(_CLASS_PHONE)
 
-    def set_focus(self, focus: Optional[str]) -> None:
+    def set_focus(self, focus) -> None:
+        """Control from the parent process: a focus string (legacy) or
+        {"focus": str|None, "zones": [workstation dicts in 0..1 coords]}."""
+        if isinstance(focus, dict):
+            self._zones = list(focus.get("zones") or [])
+            focus = focus.get("focus")
+        self._set_focus(focus)
+
+    def _set_focus(self, focus: Optional[str]) -> None:
         """Called by the worker when the live view focuses this camera
         (app/web/server.py's focus coordinator). In the Phone view the GPU
         freed by pausing the other cameras is spent on resolution: phones
@@ -1433,11 +1509,14 @@ class ActivityDetector:
             # (it kept e.g. "facing a monitor" alive in the Phone view).
             self._track_smooth.clear()
             logger.info("Activity focus=%s -> analysing %s", focus or "everything", self._classes)
-        size = self._focus_phone_imgsz if focus == "phone" and self._want_phone else self._base_img_size
+        # The resolution boost and hand zoom are the YOLO path's way to find small
+        # phones; RF-DETR already looks at each person at native resolution.
+        boost = focus == "phone" and self._want_phone and self._rfdetr is None
+        size = self._focus_phone_imgsz if boost else self._base_img_size
         if size != self._img_size:
             logger.info("Activity focus=%s -> object pass at imgsz %d", focus or "none", size)
             self._img_size = size
-        zoom = self._phone_zoom_always or (focus == "phone" and self._want_phone)
+        zoom = self._rfdetr is None and (self._phone_zoom_always or boost)
         if zoom != self._phone_zoom:
             logger.info("Hand zoom check for phones: %s", "on" if zoom else "off")
             self._phone_zoom = zoom
@@ -1602,6 +1681,14 @@ class ActivityDetector:
             # stock COCO class, which misses phones seen from above and
             # fires on chargers and routers.
             phone_boxes = self._site_phone_boxes(frame)
+        elif self._rfdetr is not None and (self._want_phone or self._want_monitor):
+            # Per person: upper body + hands cropped at native resolution ->
+            # RF-DETR. A find that is mostly skin is a hand, not a phone.
+            phone_boxes = [
+                (b, c) for b, c in self._rfdetr.detect_in_people(frame, [pb for _t, pb, _s in person_boxes])
+                if _skin_share(frame, b) <= _RFDETR_MAX_SKIN
+            ]
+            phone_hints = []
 
         pose_results = self._pose_model.predict(
             frame, imgsz=self._pose_img_size, conf=self._pose_conf,
@@ -1688,22 +1775,29 @@ class ActivityDetector:
 
         tracked: list[TrackedFace] = []
         active_track_ids = set()
+        zones_px = [
+            {"name": z.get("name"),
+             "seat": tuple(int(v * d) for v, d in zip(z["seat"], (w, h, w, h))),
+             "screen": tuple(int(v * d) for v, d in zip(z["screen"], (w, h, w, h))) if z.get("screen") else None}
+            for z in self._zones if z.get("seat")
+        ]
 
         for track_id, bbox, score in person_boxes:
             active_track_ids.add(track_id)
             best_pose = pose_by_track[track_id]
+            seat_zone = _seat_zone_for(bbox, best_pose, zones_px, self._kp_min_conf)
 
             posture = (
                 _classify_posture(
                     best_pose[0], best_pose[1], bbox,
                     self._knee_torso_ratio, self._standing_aspect, self._kp_min_conf,
-                    chair_boxes, learned_posture.get(track_id),
+                    chair_boxes, learned_posture.get(track_id), seat_zone is not None,
                 )
                 if best_pose is not None
                 else _classify_posture(
                     np.zeros((0, 2), dtype=np.float32), np.zeros(0, dtype=np.float32), bbox,
                     self._knee_torso_ratio, self._standing_aspect, self._kp_min_conf,
-                    chair_boxes, learned_posture.get(track_id),
+                    chair_boxes, learned_posture.get(track_id), seat_zone is not None,
                 )
             )
             posture = self._stand_up_guard.apply(
@@ -1715,7 +1809,11 @@ class ActivityDetector:
             detected_phone = owned                     # a real detection this pass, before the hold
             held = self._phone_hold.update(track_id, owned, bbox, best_pose, time.monotonic(), self._kp_min_conf)
             if owned is None and held is not None:
-                owned = (held[0], held[1], 0.0)
+                # A phone carried over a missed pass is re-checked like a fresh
+                # find: a hand now covering that spot (chin resting on a fist)
+                # is not a phone.
+                if _skin_share(frame, held[0]) <= _RFDETR_MAX_SKIN:
+                    owned = (held[0], held[1], 0.0)
             raw_phone = owned is not None
             best_phone_bbox, best_phone_conf = (owned[0], owned[1]) if owned else (None, 0.0)
             best_phone_dist = float("inf")
@@ -1745,9 +1843,18 @@ class ActivityDetector:
             raw_monitor = False
             if self._want_monitor:
                 head = _head_direction(best_pose, self._kp_min_conf)
+                # At a drawn workstation, its own screen is the one that counts
+                # (a neighbour's screen in the same direction does not).
+                own = [(seat_zone["screen"], _CLASS_TV)] if seat_zone is not None and seat_zone["screen"] else None
                 screen, looking = self._gaze.update(
-                    track_id, head, screens, bbox, now_m, self._monitor_max_distance_factor,
+                    track_id, head, own or screens, bbox, now_m, self._monitor_max_distance_factor,
                 )
+                if not looking and head is None and own and posture != "standing":
+                    # Head not readable (seen from behind, ~30% of the time on
+                    # these cameras): seated at a workstation means facing its
+                    # screen -- chairs face their desks. The phone and
+                    # hands-together checks below still overrule it.
+                    screen, looking = own[0][0], True
                 if looking and self._monitor_requires_sitting and posture == "standing":
                     looking = False
                 if looking and owned is not None:
@@ -1776,11 +1883,10 @@ class ActivityDetector:
                 track_id, _PhoneUseConfidence.evidence(detected_phone, held=raw_phone and detected_phone is None),
             ) if self._want_phone else 0.0
 
-            # A phone seen (or held, _PhoneHold) this pass counts at once --
-            # waiting for a second vote added a full pass of delay, and the
-            # session layer already demands steady evidence before anything
-            # is recorded. The votes still bridge a single missed pass.
-            phone_in_use = raw_phone or sum(history["phone"]) >= _PHONE_MIN_VOTES
+            # Temporal confirmation: a phone (seen, or held through a miss by
+            # _PhoneHold) in 3 of the last 5 passes. One stray detection
+            # never shows as phone use; a real one is confirmed within ~1s.
+            phone_in_use = sum(history["phone"]) >= _PHONE_MIN_VOTES
             computer_in_use = sum(history["computer"]) >= _COMPUTER_MIN_VOTES or (
                 raw_computer and len(history["computer"]) < 3
             )

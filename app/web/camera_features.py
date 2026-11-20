@@ -55,3 +55,25 @@ def features_for(
     if table is not None and camera_id.lower() in table:
         return table[camera_id.lower()]
     return CameraFeatures(face=True, activity=default_activity)
+
+
+def load_workstations() -> Optional[dict[str, list[dict]]]:
+    """{camera_id: [{"name", "seat": [x1,y1,x2,y2], "screen": [...] | None}]}
+    from the workstations table (Admin -> Workstations), coordinates as
+    fractions of the frame. None when it can't be read (table not created
+    yet, database down) -- cameras then keep the zones they have."""
+    try:
+        with get_session() as session:
+            rows = session.execute(text(
+                "SELECT camera_id, name, seat_x1, seat_y1, seat_x2, seat_y2, "
+                "screen_x1, screen_y1, screen_x2, screen_y2 FROM workstations ORDER BY id"
+            )).all()
+    except Exception as exc:
+        logger.debug("Workstations not readable (%s)", exc)
+        return None
+    out: dict[str, list[dict]] = {}
+    for cid, name, *v in rows:
+        screen = [float(x) for x in v[4:]] if all(x is not None for x in v[4:]) else None
+        out.setdefault(str(cid).lower(), []).append(
+            {"name": name, "seat": [float(x) for x in v[:4]], "screen": screen})
+    return out

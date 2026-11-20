@@ -1,0 +1,11 @@
+{
+  "enabled_activities": [
+    "SITTING",
+    "STANDING",
+    "WALKING",
+    "PHONE_INTERACTION",
+    "MONITOR_INTERACTION",
+    "COMPUTER_INTERACTION",
+    "STATIONARY"
+  ]
+}

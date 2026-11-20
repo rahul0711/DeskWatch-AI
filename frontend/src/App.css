@@ -1378,9 +1378,32 @@
   gap: 8px;
 }
 
+.app--sidebar-closed {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0 24px;
+}
+
 .app__main {
   padding: 24px 0 48px;
   min-width: 0;
+}
+
+.app__sidebar-toggle {
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  margin-bottom: 16px;
+}
+
+.app__sidebar-toggle:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .activity__top {

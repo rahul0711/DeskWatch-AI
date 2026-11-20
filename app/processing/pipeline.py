@@ -163,6 +163,9 @@ class FacePipeline:
         self._base_activity_interval = self._min_activity_interval
         self._last_activity_time = 0.0
         self._activity_paused = False
+        # What the activity worker is told: the live-view focus and the
+        # camera's workstation zones (Admin -> Workstations).
+        self._activity_control: dict = {"focus": None, "zones": []}
 
         if "ocr" in enabled_detectors:
             self._ocr_worker = ProcessDetectionWorker(
@@ -413,8 +416,16 @@ class FacePipeline:
             self._min_activity_interval = 1.0 / focus_fps
         else:
             self._min_activity_interval = self._base_activity_interval
+        self._activity_control = {**self._activity_control, "focus": focus}
         if self._activity_worker is not None:
-            self._activity_worker.set_control(focus)
+            self._activity_worker.set_control(self._activity_control)
+
+    def set_activity_zones(self, zones: list) -> None:
+        """Workstation zones for this camera: [{"name", "seat": [x1,y1,x2,y2],
+        "screen": [...] or None}] as fractions of the frame."""
+        self._activity_control = {**self._activity_control, "zones": list(zones)}
+        if self._activity_worker is not None:
+            self._activity_worker.set_control(self._activity_control)
 
     def restart_activity_worker(self, activity_kwargs: dict) -> bool:
         """Replace the activity worker with one built from new kwargs (the

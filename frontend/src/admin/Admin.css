@@ -1,0 +1,422 @@
+/* Admin + Reports pages. Uses the tokens from index.css. */
+
+.admin {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.admin__sections {
+  display: flex;
+  gap: 8px;
+}
+
+.admin__sections button,
+.admin__actions button,
+.admin__form-actions button,
+.admin__pager button {
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  border-radius: 6px;
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.admin__sections button:hover,
+.admin__actions button:hover:not(:disabled),
+.admin__form-actions button:hover:not(:disabled),
+.admin__pager button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.admin__sections button.is-active {
+  background: var(--text);
+  color: var(--bg);
+  border-color: var(--text);
+  font-weight: 600;
+}
+
+.admin button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.admin__panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.admin__panel h2 {
+  margin: 0 0 6px;
+  font-size: 1.05rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.admin__hint {
+  color: var(--text-dim);
+  font-size: 13px;
+  margin: 0 0 12px;
+}
+
+.admin__error {
+  color: var(--bad);
+  font-size: 13px;
+  margin: 0 0 12px;
+}
+
+.admin__sub {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+button.admin__primary,
+.admin__actions button.admin__primary,
+.admin__form-actions button.admin__primary {
+  background: var(--text);
+  color: var(--bg);
+  border: 1px solid var(--text);
+  border-radius: 6px;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-bottom: 14px;
+}
+
+.admin__actions button.admin__primary,
+.admin__form-actions button.admin__primary {
+  margin-bottom: 0;
+}
+
+.admin__actions button.admin__danger {
+  color: var(--bad);
+}
+
+.admin__actions button.admin__danger:hover:not(:disabled) {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+.admin__close {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 20px;
+  cursor: pointer;
+}
+
+/* Tables */
+.admin__table-wrap {
+  overflow-x: auto;
+}
+
+.admin__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.admin__table th {
+  text-align: left;
+  color: var(--text-dim);
+  font-weight: 500;
+  font-size: 12px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--panel-border);
+  white-space: nowrap;
+}
+
+.admin__table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--panel-border);
+  vertical-align: top;
+}
+
+.admin__table--numbers td:not(:first-child) {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.admin__row--off td {
+  opacity: 0.55;
+}
+
+.admin__row--click {
+  cursor: pointer;
+}
+
+.admin__row--click:hover td {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.admin__row--selected td {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.admin__row--editing td {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.admin__row--editing input,
+.admin__row--editing select {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.admin__actions {
+  white-space: nowrap;
+  text-align: right;
+}
+
+.admin__actions button + button {
+  margin-left: 6px;
+}
+
+.admin__cams {
+  max-width: 260px;
+}
+
+.admin__details {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  max-width: 420px;
+  word-break: break-word;
+}
+
+.admin__role {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  border: 1px solid var(--panel-border);
+}
+
+.admin__role--super_admin {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.admin__role--admin {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.admin__pager {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+/* Forms */
+.admin__form,
+.admin__filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+  align-items: end;
+}
+
+.admin__filters {
+  grid-template-columns: repeat(auto-fill, minmax(220px, auto));
+}
+
+.admin__form label,
+.admin__filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.admin input:not([type='checkbox']),
+.admin select {
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.admin input:focus,
+.admin select:focus {
+  outline: none;
+  border-color: var(--text-dim);
+}
+
+.admin__form-wide {
+  grid-column: 1 / -1;
+}
+
+.admin__form-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.admin__form-actions .admin__hint {
+  margin: 0;
+}
+
+.admin label.admin__inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.admin__checklist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 6px;
+}
+
+.admin__checklist label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+@media (max-width: 700px) {
+  .admin__actions {
+    white-space: normal;
+  }
+
+  .admin__actions button {
+    margin: 2px;
+  }
+}
+
+/* Attendance (present / absent) */
+.attendance__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.attendance__stat {
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.attendance__stat strong {
+  font-size: 24px;
+  color: var(--text);
+}
+
+.attendance__stat--ok strong {
+  color: var(--ok);
+}
+
+.attendance__stat--bad strong {
+  color: var(--bad);
+}
+
+.attendance__person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.attendance__photo {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--panel-border);
+  flex-shrink: 0;
+}
+
+.attendance__status {
+  display: inline-block;
+  border: 1px solid;
+  border-radius: 999px;
+  padding: 1px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.attendance__status--present {
+  color: var(--ok);
+}
+
+.attendance__status--absent {
+  color: var(--bad);
+}
+
+/* Workstations: zones drawn over a camera still */
+.ws__draft {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.ws__draft button.is-active {
+  border-color: var(--accent, #3b82f6);
+  color: var(--text);
+}
+
+.ws__canvas {
+  position: relative;
+  margin: 12px 0;
+  max-width: 100%;
+  user-select: none;
+  touch-action: none;
+  line-height: 0;
+}
+
+.ws__canvas img {
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+
+.ws__canvas--drawing {
+  cursor: crosshair;
+}
+
+.ws__box {
+  position: absolute;
+  border: 2px solid;
+  border-radius: 3px;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+.ws__label {
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 0 5px;
+  border-radius: 3px 0 3px 0;
+  white-space: nowrap;
+}

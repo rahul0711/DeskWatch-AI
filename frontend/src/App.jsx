@@ -59,7 +59,7 @@ const GROUPS = [
     title: 'Settings',
     pages: [
       { key: 'admin', label: 'Admin', roles: ADMINS,
-        desc: 'Logins and roles, which cameras run Face / Body movement, and the audit log.' },
+        desc: 'Logins and roles, which cameras run Face / Body movement, workstations (seat + screen zones), and the audit log.' },
     ],
   },
 ]
@@ -70,6 +70,12 @@ export default function App() {
   const [tab, setTab] = useState('cameras')
   const [changingPassword, setChangingPassword] = useState(false)
   const [prefillImage, setPrefillImage] = useState(null)
+  // Admin sidebar can be hidden to give the page the full width. Remembered per browser.
+  const [sidebarOpen, setSidebarOpen] = useState(() => localStorage.getItem('sidebarOpen') !== 'false')
+
+  useEffect(() => {
+    localStorage.setItem('sidebarOpen', String(sidebarOpen))
+  }, [sidebarOpen])
 
   const handleAuthError = useCallback(() => {
     clearToken()
@@ -149,45 +155,57 @@ export default function App() {
   // Admin and Super Admin: a sidebar that says what each page does.
   if (ADMINS.includes(user.role)) {
     return (
-      <div className="app app--sidebar">
-        <aside className="app__sidebar">
-          <h1>CCTV Attendance</h1>
-          <nav>
-            {GROUPS.map((g) => {
-              const pages = g.pages.filter((p) => p.roles.includes(user.role))
-              if (!pages.length) return null
-              return (
-                <div key={g.title} className="app__nav-group">
-                  <div className="app__nav-title">{g.title}</div>
-                  {pages.map((p) => (
-                    <button
-                      key={p.key}
-                      className={`app__nav-item${current === p.key ? ' app__nav-item--active' : ''}`}
-                      onClick={() => setTab(p.key)}
-                    >
-                      <span className="app__nav-label">{p.label}</span>
-                      <span className="app__nav-desc">{p.desc}</span>
-                    </button>
-                  ))}
-                </div>
-              )
-            })}
-          </nav>
-          <div className="app__sidebar-user">
-            <span title={user.email || user.username}>
-              {user.full_name} · {user.role_name}
-            </span>
-            <div>
-              <button className="app__logout" onClick={() => setChangingPassword(true)}>
-                Change password
-              </button>
-              <button className="app__logout" onClick={handleLogout}>
-                Log out
-              </button>
+      <div className={`app app--sidebar${sidebarOpen ? '' : ' app--sidebar-closed'}`}>
+        {sidebarOpen && (
+          <aside className="app__sidebar">
+            <h1>CCTV Attendance</h1>
+            <nav>
+              {GROUPS.map((g) => {
+                const pages = g.pages.filter((p) => p.roles.includes(user.role))
+                if (!pages.length) return null
+                return (
+                  <div key={g.title} className="app__nav-group">
+                    <div className="app__nav-title">{g.title}</div>
+                    {pages.map((p) => (
+                      <button
+                        key={p.key}
+                        className={`app__nav-item${current === p.key ? ' app__nav-item--active' : ''}`}
+                        onClick={() => setTab(p.key)}
+                      >
+                        <span className="app__nav-label">{p.label}</span>
+                        <span className="app__nav-desc">{p.desc}</span>
+                      </button>
+                    ))}
+                  </div>
+                )
+              })}
+            </nav>
+            <div className="app__sidebar-user">
+              <span title={user.email || user.username}>
+                {user.full_name} · {user.role_name}
+              </span>
+              <div>
+                <button className="app__logout" onClick={() => setChangingPassword(true)}>
+                  Change password
+                </button>
+                <button className="app__logout" onClick={handleLogout}>
+                  Log out
+                </button>
+              </div>
             </div>
-          </div>
-        </aside>
-        <main className="app__main">{page}</main>
+          </aside>
+        )}
+        <main className="app__main">
+          <button
+            className="app__sidebar-toggle"
+            onClick={() => setSidebarOpen((open) => !open)}
+            aria-expanded={sidebarOpen}
+            title={sidebarOpen ? 'Hide the menu for more room' : 'Show the menu'}
+          >
+            {sidebarOpen ? '« Hide menu' : '» Show menu'}
+          </button>
+          {page}
+        </main>
       </div>
     )
   }

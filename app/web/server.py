@@ -42,7 +42,7 @@ import cv2
 import numpy as np
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -55,7 +55,7 @@ from app.activity import (
 from app.activity.config import normalize_activity_types
 from app.activity.settings import load_enabled_activities, save_enabled_activities
 from app.attendance.access import AccessPolicy
-from app.web.camera_features import CameraFeatures, features_for, load_camera_features
+from app.web.camera_features import CameraFeatures, features_for, load_camera_features, load_workstations
 from app.camera.rtsp_stream import RTSPStream
 from app.config import AppConfig, CameraConfig, load_config
 from app.detection.face_detector import align_face
@@ -296,6 +296,8 @@ class CameraWebSession:
     features: CameraFeatures = field(default_factory=lambda: CameraFeatures(face=True, activity=False))
     # Live-view focus (_coordinate_focus): (paused, focus filter) as applied.
     _focus_applied: tuple = field(default=(False, None), repr=False)
+    # Workstation zones last sent to the activity detector (None = not yet).
+    _zones_applied: Optional[list] = field(default=None, repr=False)
 
     # How many one-minute buckets of head-count history to keep in memory
     # per camera (120 = 2 hours). In-memory only, by design -- resets on
@@ -1118,11 +1120,27 @@ def _apply_focus_locked(sessions: dict, focus_fps: float, admin_enabled=()) -> N
         )
 
 
+def _apply_workstations() -> None:
+    """Send each camera's workstation zones to its detector when they change
+    (Admin -> Workstations); picked up within _FEATURES_POLL_S."""
+    zones = load_workstations()
+    if zones is None:
+        return
+    for cam_id, session in list(_sessions.items()):
+        wanted = zones.get(cam_id.lower(), [])
+        if session._activity is None or wanted == session._zones_applied:
+            continue
+        session.pipeline.set_activity_zones(wanted)
+        session._zones_applied = wanted
+        logger.info("[%s] Workstations: %d zone(s) %s", session.camera.name, len(wanted), [z["name"] for z in wanted])
+
+
 def _watch_camera_features(stop: threading.Event) -> None:
     """Restart a camera whose face / body-movement switches changed. Only
     that camera blinks (a few seconds while its models load); the others
     keep running. Open activity sessions are stored before the restart."""
     while not stop.wait(_FEATURES_POLL_S):
+        _apply_workstations()
         table = load_camera_features()
         if table is None:
             continue
@@ -1570,6 +1588,23 @@ class ViewModeRequest(BaseModel):
     view_mode: Optional[str] = None
     # "all" | "phone" | "body" | "monitor" | "computer"
     activity_filter: Optional[str] = None
+
+
+@app.get("/api/cameras/{camera_id}/snapshot")
+def camera_snapshot(camera_id: str, _: Principal = Depends(require_camera)) -> Response:
+    """The latest raw frame (no overlay) as JPEG -- what Admin -> Workstations
+    draws seat and screen zones on."""
+    session = _sessions.get(camera_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    with session._lock:
+        result = session._latest_result
+    if result is None or result.frame is None:
+        raise HTTPException(status_code=503, detail="No frame from this camera yet")
+    ok, buf = cv2.imencode(".jpg", result.frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    if not ok:
+        raise HTTPException(status_code=500, detail="Could not encode frame")
+    return Response(content=buf.tobytes(), media_type="image/jpeg")
 
 
 @app.patch("/api/cameras/{camera_id}/view-mode")

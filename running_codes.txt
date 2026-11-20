@@ -1,0 +1,16 @@
+source .venv/bin/activate
+export LD_LIBRARY_PATH="$(bash deploy/cuda_lib_path.sh)"
+
+uvicorn app.web.attendance_server:app --host 0.0.0.0 --port 8003   # attendance only
+uvicorn app.web.server:app --host 0.0.0.0 --port 8000              # camera view only
+python main.py                                                     # desktop OpenCV window
+python scripts/test_connection.py                                  # check the cameras are reachable
+
+########installs all the python package 
+cd /home/aiserver/Desktop/Facenet/CCTV_FOR_MOVEMENTS
+bash deploy/setup.sh
+
+
+####run for the whole project
+cd /home/aiserver/Desktop/Facenet/CCTV_FOR_MOVEMENTS
+bash run_all.sh

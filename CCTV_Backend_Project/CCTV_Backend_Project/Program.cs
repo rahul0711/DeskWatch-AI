@@ -39,6 +39,7 @@ builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<LoginService>();
 builder.Services.AddScoped<PersonService>();
 builder.Services.AddScoped<ReportService>();
+builder.Services.AddScoped<WorkstationService>();
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(o =>

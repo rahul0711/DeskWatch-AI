@@ -41,6 +41,12 @@ namespace CCTV_Backend_Project.Dtos
 
     public record UpdateCameraRequest(string? Name, bool? IsActive);
 
+    /// <summary>A workstation on a camera: where its chair is (seat) and the
+    /// screen the person there faces, as fractions (0..1) of the camera frame.</summary>
+    public record WorkstationDto(int Id, string CameraId, string Name, double[] Seat, double[]? Screen, DateTime CreatedAt);
+
+    public record SaveWorkstationRequest(string Name, double[] Seat, double[]? Screen);
+
     /// <summary>Which analyses a camera runs; null leaves that switch as it is.</summary>
     public record UpdateCameraFeaturesRequest(bool? FaceEnabled, bool? ActivityEnabled);
 

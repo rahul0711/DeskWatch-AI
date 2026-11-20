@@ -213,6 +213,12 @@ class ActivityConfig:
     # Hand zoom check: a zoomed second look around every visible hand for
     # phones (one extra batched pass). Always on in the Phone view; this
     # turns it on for every view too, at that extra GPU cost.
+    # Phone detector: "rfdetr" (RF-DETR on each person's native-resolution
+    # upper-body crop, app/detection/rfdetr_phone.py) or "yolo" (YOLO class
+    # + hand zoom). rfdetr falls back to yolo if its model file is missing.
+    phone_detector: str = field(default_factory=lambda: os.getenv("ACTIVITY_PHONE_DETECTOR", "rfdetr").strip().lower())
+    rfdetr_model: str = field(default_factory=lambda: _model_path("ACTIVITY_RFDETR_MODEL") or str(ROOT / "models" / "rfdetr-medium.onnx"))
+    rfdetr_conf: float = field(default_factory=lambda: _float("ACTIVITY_RFDETR_CONF", 0.25))
     phone_zoom_always: bool = field(default_factory=lambda: _bool("ACTIVITY_PHONE_ZOOM_ALWAYS", False))
     phone_zoom_conf: float = field(default_factory=lambda: _float("ACTIVITY_PHONE_ZOOM_CONF", 0.20))
 
@@ -447,6 +453,9 @@ class ActivityConfig:
             posture_model=self.posture_model,
             focus_phone_imgsz=self.focus_phone_imgsz,
             phone_zoom_always=self.phone_zoom_always,
+            phone_detector=self.phone_detector,
+            rfdetr_model=self.rfdetr_model,
+            rfdetr_conf=self.rfdetr_conf,
             phone_zoom_conf=self.phone_zoom_conf,
             use_fp16=self.use_fp16,
         )

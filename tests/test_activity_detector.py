@@ -327,3 +327,36 @@ def test_slivers_of_a_desk_phone_do_not_make_it_move():
         out = desk.filter(obs, [], now=t)
         t += 0.8
     assert out == [], "a phone that never moved is on the desk"
+
+
+
+def _pose_hand_shoulders(hand, shoulders_y):
+    kxy = np.zeros((17, 2), dtype=np.float32)
+    kconf = np.zeros(17, dtype=np.float32)
+    kxy[10] = hand
+    kxy[5], kxy[6] = (180, shoulders_y), (260, shoulders_y)
+    kconf[10] = kconf[5] = kconf[6] = 0.9
+    return kxy, kconf
+
+
+def test_phone_on_the_table_beside_a_typing_hand_is_not_held():
+    """Measured reference case: hand 0.078 body heights from the phone's edge,
+    phone 0.22 body heights below the shoulders (desk level)."""
+    person = (100, 100, 400, 600)                       # body height 500
+    phone = (250, 380, 290, 420)                        # centre y 400 -> 0.22 below shoulders at 290
+    hand = (250, 380 - 39)                              # 39px = 0.078 * 500 above the phone
+    assert _phone_person_score(phone, person, _pose_hand_shoulders(hand, 290), 1920, 1080) < _PHONE_OWNER_MIN_SCORE
+
+
+def test_phone_held_out_at_chest_height_still_counts():
+    person = (100, 100, 400, 600)
+    phone = (250, 280, 290, 320)                        # centre y 300, at shoulder level
+    hand = (250, 280 - 39)
+    assert _phone_person_score(phone, person, _pose_hand_shoulders(hand, 290), 1920, 1080) >= _PHONE_OWNER_MIN_SCORE
+
+
+def test_phone_in_the_lap_with_the_hand_on_it_counts():
+    person = (100, 100, 400, 600)
+    phone = (250, 430, 290, 470)                        # low, in the lap
+    hand = (270, 450)                                   # on it
+    assert _phone_person_score(phone, person, _pose_hand_shoulders(hand, 290), 1920, 1080) >= _PHONE_OWNER_MIN_SCORE
